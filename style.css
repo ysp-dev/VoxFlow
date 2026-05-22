@@ -1027,6 +1027,18 @@ header {
   animation: spin 1s linear infinite;
 }
 
+/* Cancel state for generate button */
+.btn.btn-primary.btn-cancel {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #dc2626;
+}
+
+.btn.btn-primary.btn-cancel:hover {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
 /* Structure-transform skeleton loader */
 .transform-skeleton {
   padding: 8px 4px;

@@ -1803,7 +1803,6 @@ async function triggerParsing() {
 
 
 function setTransformingUi(isTransforming) {
-  elements.btnGenerate.disabled = isTransforming;
   elements.btnPlayPause.disabled = isTransforming;
   elements.btnNext.disabled = isTransforming;
   elements.btnPrev.disabled = isTransforming;
@@ -1811,7 +1810,14 @@ function setTransformingUi(isTransforming) {
   if (isTransforming) {
     elements.statusBadge.className = 'status-badge generating';
     elements.statusText.textContent = 'Gemini 3.5 변환 중';
-    elements.btnGenerate.innerHTML = '<i data-lucide="loader-circle" style="width:14px;height:14px;animation:spin 1s linear infinite;"></i> 구조 변환 중...';
+
+    elements.btnGenerate.disabled = false;
+    elements.btnGenerate.classList.add('btn-cancel');
+    elements.btnGenerate.innerHTML = '<i data-lucide="x-circle" style="width:14px;height:14px;"></i> 변환 취소';
+    elements.btnGenerate.onclick = () => {
+      cancelTransform();
+      renderPreview('', []);
+    };
     if (window.lucide) window.lucide.createIcons();
 
     elements.previewBody.classList.remove('hidden');
@@ -1830,6 +1836,10 @@ function setTransformingUi(isTransforming) {
   } else {
     elements.statusBadge.className = `status-badge ${queue.status === 'idle' ? 'idle' : queue.status}`;
     elements.statusText.textContent = queue.status === 'idle' ? '대기 중' : elements.statusText.textContent;
+
+    elements.btnGenerate.classList.remove('btn-cancel');
+    elements.btnGenerate.onclick = null;
+    elements.btnGenerate.disabled = false;
     elements.btnGenerate.innerHTML = '<i data-lucide="sparkles"></i> 텍스트 분석 및 플레이리스트 생성';
     if (window.lucide) window.lucide.createIcons();
   }

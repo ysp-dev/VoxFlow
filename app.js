@@ -410,11 +410,13 @@ async function transformChunkWithFallback(rawText, { apiKey, signal = null, prev
 }
 
 function formatTransformError(err) {
+  if (err?.userFriendly) return new Error(err.message);
   if (err?.status === 429) return new Error('모든 모델의 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.');
   if (/internal error/i.test(err?.message || '')) return new Error('Gemini 서버 오류가 반복됩니다. 잠시 후 다시 시도해주세요.');
   if (err?.status === 400) return new Error('구조 변환 요청이 거부되었습니다. API Key 또는 입력 내용을 확인해주세요.');
   if (err?.status === 403) return new Error('API Key 권한이 없습니다. Gemini API 사용 권한을 확인해주세요.');
-  return new Error('구조 변환에 실패했습니다. 네트워크 연결을 확인하고 다시 시도해주세요.');
+  const detail = err?.message ? `: ${err.message}` : '';
+  return new Error(`구조 변환에 실패했습니다${detail}`);
 }
 
 async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail = '', model = STRUCTURE_TRANSFORM_MODELS[0] } = {}) {
@@ -466,7 +468,7 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
   const userText = transformRules + contextNote + '\n\n원문:\n' + rawText;
 
   const payload = {
-    model: STRUCTURE_TRANSFORM_MODEL,
+    model,
     contents: [{ parts: [{ text: userText }] }],
     systemInstruction: { parts: [{ text: systemText }] },
     generationConfig: {
@@ -497,14 +499,14 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
   const finishReason = candidate?.finishReason;
   if (finishReason && finishReason !== 'STOP') {
     const err = new Error(`구조 변환이 중간에 중단되었습니다 (${finishReason}). 문서를 더 짧게 나눠 다시 시도해보세요.`);
-    err.status = 0;
+    err.status = 0; err.userFriendly = true;
     throw err;
   }
 
   const transformed = candidate?.content?.parts?.map(p => p.text || '').join('').trim();
   if (!transformed) {
     const err = new Error('구조 변환 결과가 비어 있습니다. 입력 내용을 확인해주세요.');
-    err.status = 0;
+    err.status = 0; err.userFriendly = true;
     throw err;
   }
 

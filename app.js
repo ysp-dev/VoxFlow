@@ -187,12 +187,167 @@ function escapeHtmlText(value) {
     .replace(/'/g, '&#39;');
 }
 
+const TRANSFORM_CHUNK_SIZE = 4000;
+
+function extractContentTokens(text) {
+  const tokens = new Set();
+  const addWord = (word) => {
+    const w = word.replace(/[*_`#[\]()]/g, '').trim();
+    if (w.length >= 2 && (/[가-힣]/.test(w) || /^[A-Za-z]+$/.test(w)) && !/\d/.test(w)) {
+      tokens.add(w);
+    }
+  };
+  const addLine = (line) => line.trim().split(/\s+/).forEach(addWord);
+
+  // Table cell content (skip separator rows like |---|)
+  for (const row of text.matchAll(/^\s*\|(.+)\|/gm)) {
+    if (/^[\s|:-]+$/.test(row[0])) continue;
+    row[1].split('|').forEach(cell => addLine(cell));
+  }
+
+  // List item content
+  for (const m of text.matchAll(/^[ \t]*(?:[-*•]|\d+\.)\s+(.+)/gm)) {
+    addLine(m[1]);
+  }
+
+  // General paragraph content: strip markdown markers, then sample every other sentence.
+  // Avoids over-weighting long prose while still catching silent omissions.
+  const stripped = text
+    .replace(/^#{1,3} .+/gm, '')           // headings handled separately
+    .replace(/^\s*(?:[-*•]|\d+\.)\s+/gm, '') // list markers already covered
+    .replace(/^\s*\|.+/gm, '')              // table rows already covered
+    .replace(/[*_`[\]()]/g, '');
+  const sentences = stripped.split(/(?<=[.!?。])\s+|\n+/).filter(s => s.trim().length > 4);
+  sentences.filter((_, i) => i % 2 === 0).forEach(s => addLine(s));
+
+  return [...tokens];
+}
+
+function verifyStructuralPreservation(original, transformed) {
+  const issues = [];
+
+  // Rule 6: section headings (##) must survive transformation
+  const origHeadings = (original.match(/^#{1,3} .+/gm) || []).length;
+  const trHeadings   = (transformed.match(/^#{1,3} .+/gm) || []).length;
+  if (origHeadings > 1 && trHeadings < Math.floor(origHeadings * 0.8)) {
+    issues.push(`섹션 제목 수 감소 (원문 ${origHeadings}개 → 변환 ${trHeadings}개)`);
+  }
+
+  // Content token check across tables, lists, and body paragraphs
+  const tokens = extractContentTokens(original);
+  if (tokens.length >= 4) {
+    const trLower = transformed.toLowerCase();
+    const missing = tokens.filter(t => !trLower.includes(t.toLowerCase()));
+    const missingRate = missing.length / tokens.length;
+    // Paragraph rewriting can legitimately rephrase ~40% of tokens; flag above that.
+    if (missingRate > 0.4) {
+      const examples = missing.slice(0, 3).join(', ');
+      issues.push(`원문 핵심 토큰의 ${Math.round(missingRate * 100)}%가 변환 결과에서 발견되지 않습니다 (예: ${examples}).`);
+    }
+  }
+
+  return issues;
+}
+
+function splitTextIntoTransformChunks(text, maxChars = TRANSFORM_CHUNK_SIZE) {
+  const sections = text.split(/(?=\n#{1,3} )/);
+  const chunks = [];
+  let current = '';
+
+  const flushUnit = (unit) => {
+    if (!unit.trim()) return;
+    if (unit.length <= maxChars) {
+      chunks.push(unit.trim());
+      return;
+    }
+    // Line-level fallback
+    const lines = unit.split('\n');
+    let lineBuf = '';
+    for (const line of lines) {
+      if (lineBuf.length + line.length + 1 <= maxChars) {
+        lineBuf += (lineBuf ? '\n' : '') + line;
+      } else {
+        if (lineBuf) chunks.push(lineBuf.trim());
+        if (line.length > maxChars) {
+          // Soft-slice: break at the last whitespace or punctuation before the limit
+          let remaining = line;
+          while (remaining.length > maxChars) {
+            let cut = maxChars;
+            const boundary = remaining.slice(0, maxChars).search(/[\s.,!?。，、]+(?=[^\s.,!?。，、]*$)/);
+            if (boundary > maxChars * 0.5) cut = boundary;
+            chunks.push(remaining.slice(0, cut).trim());
+            remaining = remaining.slice(cut).trimStart();
+          }
+          lineBuf = remaining;
+        } else {
+          lineBuf = line;
+        }
+      }
+    }
+    if (lineBuf.trim()) chunks.push(lineBuf.trim());
+  };
+
+  for (const section of sections) {
+    if (current.length + section.length <= maxChars) {
+      current += section;
+    } else {
+      if (current) chunks.push(current.trim());
+      if (section.length > maxChars) {
+        const paragraphs = section.split(/\n\n+/);
+        let sub = '';
+        for (const para of paragraphs) {
+          if (sub.length + para.length + 2 <= maxChars) {
+            sub += (sub ? '\n\n' : '') + para;
+          } else {
+            if (sub) chunks.push(sub.trim());
+            if (para.length > maxChars) {
+              flushUnit(para);
+              sub = '';
+            } else {
+              sub = para;
+            }
+          }
+        }
+        current = sub;
+      } else {
+        current = section;
+      }
+    }
+  }
+  if (current.trim()) flushUnit(current);
+  return chunks.filter(Boolean);
+}
+
 async function transformTextForTtsStructure(rawText, { apiKey, signal = null } = {}) {
   if (!rawText || !rawText.trim()) return '';
   if (!apiKey || apiKey.trim() === '') {
     throw new Error('구조 변환을 위해 Gemini API Key를 먼저 저장해주세요.');
   }
 
+  let transformed;
+  if (rawText.length > TRANSFORM_CHUNK_SIZE) {
+    const chunks = splitTextIntoTransformChunks(rawText);
+    const results = [];
+    let prevTail = '';
+    for (const chunk of chunks) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      results.push(await transformSingleChunk(chunk, { apiKey, signal, prevTail }));
+      prevTail = chunk.split('\n').slice(-4).join('\n');
+    }
+    transformed = results.join('\n\n');
+  } else {
+    transformed = await transformSingleChunk(rawText, { apiKey, signal });
+  }
+
+  const lossIssues = verifyStructuralPreservation(rawText, transformed);
+  if (lossIssues.length > 0) {
+    throw new Error('구조 변환 중 정보 누락이 감지되었습니다:\n' + lossIssues.join('\n'));
+  }
+
+  return transformed;
+}
+
+async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail = '' } = {}) {
   const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' + STRUCTURE_TRANSFORM_MODEL + ':generateContent';
   const systemText = [
     'You transform source documents into Korean-friendly TTS input.',
@@ -235,7 +390,10 @@ async function transformTextForTtsStructure(rawText, { apiKey, signal = null } =
     '21. 범위 기호 처리: 물결표(~)는 문맥에 따라 "에서", "부터", "까지" 등의 명확한 한글 조사로 풀어 쓴다.',
     '22. 마커 남발 방지: [emphasis]와 [cautious]는 텍스트 전체의 핵심 주제에만 보수적으로 적용하며, 한 단락에 2회를 초과하지 않는다.'
   ].join('\n');
-  const userText = transformRules + '\n\n원문:\n' + rawText;
+  const contextNote = prevTail
+    ? `\n\n[이전 청크 끝부분 — 번호/목록 연속성 유지 참고용, 변환 대상 아님]\n${prevTail}\n[/이전 청크 끝부분]`
+    : '';
+  const userText = transformRules + contextNote + '\n\n원문:\n' + rawText;
 
   const payload = {
     model: STRUCTURE_TRANSFORM_MODEL,
@@ -263,7 +421,13 @@ async function transformTextForTtsStructure(rawText, { apiKey, signal = null } =
   }
 
   const result = await response.json();
-  const transformed = result.candidates?.[0]?.content?.parts
+  const candidate = result.candidates?.[0];
+  const finishReason = candidate?.finishReason;
+  if (finishReason && finishReason !== 'STOP') {
+    throw new Error(`Gemini 3.5 구조 변환이 완전히 완료되지 않았습니다 (finishReason: ${finishReason}). 원본 정보가 누락되었을 수 있습니다.`);
+  }
+
+  const transformed = candidate?.content?.parts
     ?.map(part => part.text || '')
     .join('')
     .trim();
@@ -338,7 +502,7 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
 
       const candidate = result.candidates?.[0];
       if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
-        console.warn(`Gemini generation finished with warning reason: ${candidate.finishReason}`);
+        throw new Error(`음성 생성이 비정상 종료되었습니다 (finishReason: ${candidate.finishReason}). 해당 청크의 음성이 불완전할 수 있습니다.`);
       }
 
       const part = candidate?.content?.parts?.[0];
@@ -684,6 +848,7 @@ class QueueManager {
     this.startTime = 0;
     this.pausedAt = 0;
     this.generationAbortController = null;
+    this.queueVersion = 0;
 
     // API configuration for prefetching
     this.apiConfig = {
@@ -750,6 +915,7 @@ class QueueManager {
    */
   setSegments(segments) {
     this.stop();
+    this.queueVersion++;
     this.segments = segments.map(seg => ({
       ...seg,
       audioBuffer: null,
@@ -997,13 +1163,16 @@ class QueueManager {
       this.emit('stateUpdate', this.segments);
       
       const signal = this.generationAbortController?.signal ?? null;
+      const capturedVersion = this.queueVersion;
       (async () => {
         try {
           const result = await generateSpeech(segment.text, { ...this.apiConfig, signal });
+          if (this.queueVersion !== capturedVersion) return;
           segment.audioBuffer = await this.decodeAudio(result.base64Data, result.mimeType);
           segment.state = 'ready';
           this.releaseDistantAudioBuffers(nextIndex);
         } catch (err) {
+          if (this.queueVersion !== capturedVersion) return;
           if (err.name === 'AbortError') {
             segment.state = 'idle';
           } else {
@@ -1012,7 +1181,9 @@ class QueueManager {
             segment.errorMsg = err.message;
           }
         } finally {
-          this.emit('stateUpdate', this.segments);
+          if (this.queueVersion === capturedVersion) {
+            this.emit('stateUpdate', this.segments);
+          }
         }
       })();
     }
@@ -1148,6 +1319,7 @@ const elements = {
   apiKeyWrapper: document.getElementById('api-key-wrapper'),
   btnSaveApiKey: document.getElementById('btn-save-api-key'),
   btnEditApiKey: document.getElementById('btn-edit-api-key'),
+  btnDeleteApiKey: document.getElementById('btn-delete-api-key'),
   
   tabText: document.getElementById('tab-text'),
   tabMd: document.getElementById('tab-md'),
@@ -1238,6 +1410,16 @@ function setupApiKey() {
     elements.apiKeyInput.focus();
     elements.apiKeyInput.select();
   });
+  elements.btnDeleteApiKey.addEventListener('click', () => {
+    cancelTransform();
+    queue.stop();
+    localStorage.removeItem('aether_tts_api_key');
+    state.apiKey = '';
+    queue.setConfig({ apiKey: '' });
+    elements.apiKeyInput.value = '';
+    setApiKeyEditMode(true);
+    showNotification('API Key가 삭제되었습니다.', 'success');
+  });
 
   elements.apiKeyInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
@@ -1283,6 +1465,7 @@ function setApiKeyEditMode(isEditing) {
   elements.apiKeyInput.readOnly = !isEditing;
   elements.btnSaveApiKey.classList.toggle('hidden', !isEditing);
   elements.btnEditApiKey.classList.toggle('hidden', isEditing);
+  elements.btnDeleteApiKey.classList.toggle('hidden', isEditing);
   setApiKeySecurityState(Boolean(state.apiKey) && !isEditing);
 }
 
@@ -1298,9 +1481,10 @@ function setupTabs() {
       elements.tabMd.classList.remove('active');
       elements.contentTextInput.classList.add('active');
       elements.contentMdInput.classList.remove('active');
-      
-      // Auto generate playlist if text is present
-      triggerParsing();
+      cancelTransform();
+      state.segments = [];
+      queue.setSegments([]);
+      renderPreview('', []);
     }
   });
 
@@ -1311,9 +1495,10 @@ function setupTabs() {
       elements.tabText.classList.remove('active');
       elements.contentMdInput.classList.add('active');
       elements.contentTextInput.classList.remove('active');
-      
-      // Auto generate playlist if file is parsed
-      triggerParsing();
+      cancelTransform();
+      state.segments = [];
+      queue.setSegments([]);
+      renderPreview('', []);
     }
   });
 }
@@ -1359,12 +1544,11 @@ function setupUploadZone() {
   // Remove file action
   elements.btnRemoveFile.addEventListener('click', (e) => {
     e.stopPropagation(); // Avoid triggering upload click
+    cancelTransform();
     state.currentFile = null;
     elements.fileInput.value = '';
     elements.fileInfoCard.classList.add('hidden');
     elements.uploadZone.classList.remove('hidden');
-    
-    // Clear preview
     state.segments = [];
     queue.setSegments([]);
     renderPreview('', []);
@@ -1421,6 +1605,12 @@ function setupTextareaCounter() {
   elements.textareaInput.addEventListener('input', () => {
     const count = elements.textareaInput.value.length;
     elements.charCounter.textContent = `${count} 자`;
+    if (state.segments.length > 0) {
+      cancelTransform();
+      state.segments = [];
+      queue.setSegments([]);
+      renderPreview('', []);
+    }
   });
 
   elements.btnGenerate.addEventListener('click', async () => {
@@ -1466,13 +1656,23 @@ function setupSettings() {
    Interactive Parser and Playlist Generator
    ========================================================================== */
 
-async function triggerParsing() {
-  let sourceText = '';
-  const parseRequestId = ++state.parseRequestId;
-
+function cancelTransform() {
+  state.parseRequestId++;
   if (state.transformAbortController) {
     state.transformAbortController.abort();
+    state.transformAbortController = null;
   }
+  if (state.isTransforming) {
+    state.isTransforming = false;
+    setTransformingUi(false);
+  }
+}
+
+async function triggerParsing() {
+  let sourceText = '';
+  cancelTransform();
+  queue.stop();
+  const parseRequestId = ++state.parseRequestId;
   state.transformAbortController = new AbortController();
 
   if (state.isMarkdownMode) {
@@ -1556,6 +1756,12 @@ function renderPreview(htmlContent, segments) {
     elements.previewBody.innerHTML = '<p class="text-muted text-center" style="grid-column: span 2; padding: 40px 0;">분석 및 렌더링된 데이터가 없습니다. 원고를 입력하거나 파일을 업로드하세요.</p>';
     elements.playlistContainer.innerHTML = '<p class="text-muted text-center" style="padding: 20px 0;">플레이리스트가 비어 있습니다.</p>';
     elements.segmentCounter.textContent = '청크 0 / 0';
+    currentViewMode = 'preview';
+    elements.previewBody.classList.remove('hidden');
+    elements.playlistContainer.classList.add('hidden');
+    elements.previewTitle.innerHTML = '<i data-lucide="book-open"></i> 스마트 프리뷰어';
+    elements.btnToggleView.classList.add('hidden');
+    if (window.lucide) window.lucide.createIcons();
     return;
   }
   
@@ -1813,6 +2019,9 @@ function showNotification(message, type = 'error') {
   if (!container) {
     container = document.createElement('div');
     container.id = 'notification-container';
+    container.setAttribute('role', 'status');
+    container.setAttribute('aria-live', 'polite');
+    container.setAttribute('aria-atomic', 'false');
     container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
     document.body.appendChild(container);
   }

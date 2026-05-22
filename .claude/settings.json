@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git -C /Users/youngsoonpark/Documents/GitHub/VoxFlow status --short)"
+      "Bash(git -C /Users/youngsoonpark/Documents/GitHub/VoxFlow status --short)",
+      "Bash(node --check /Users/youngsoonpark/Documents/GitHub/VoxFlow/app.js)"
     ]
   }
 }

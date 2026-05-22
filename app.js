@@ -520,118 +520,120 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
     throw new Error('Gemini API Key가 누락되었습니다. 상단 설정 바에서 API Key를 입력해주세요.');
   }
 
+  // Ensure clean model format. Gemini TTS requires a native TTS model variant.
   const cleanModel = model.replace(/^models\//, '') || DEFAULT_TTS_MODEL;
-
-  // Build fallback list starting from the user-selected model (forward only)
-  const primaryIdx = TTS_FALLBACK_MODELS.indexOf(cleanModel);
-  const modelsToTry = primaryIdx >= 0 ? TTS_FALLBACK_MODELS.slice(primaryIdx) : [cleanModel];
-
-  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
-  let lastError = null;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent`;
 
   const systemText = `You are a professional Text-To-Speech narrator. Read the provided text naturally, interpreting inline markers as follows: [pause] = insert a brief pause; [emphasis] = stress the immediately following word or phrase; [cautious] = read the following sentence in a careful, cautionary tone. Remove these markers from the spoken output — do not read them aloud. Do NOT add any preamble, commentary, or filler phrases such as "Sure", "Here is the audio", or "Reading now". Start reading immediately.${styleHint ? ` Speech style: ${styleHint}` : ''}`;
 
-  for (let mi = 0; mi < modelsToTry.length; mi++) {
-    const currentModel = modelsToTry[mi];
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent`;
-
-    if (mi > 0) {
-      showNotification(`TTS ${modelsToTry[mi - 1]} 실패 → ${currentModel} 로 전환합니다.`, 'warning');
-    }
-
-    const payload = {
-      model: currentModel,
-      contents: [{ parts: [{ text }] }],
-      systemInstruction: { parts: [{ text: systemText }] },
-      generationConfig: {
-        responseModalities: ['AUDIO'],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: voice }
+  const payload = {
+    model: cleanModel,
+    contents: [
+      {
+        parts: [{ text }]
+      }
+    ],
+    systemInstruction: {
+      parts: [{ text: systemText }]
+    },
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: voice
           }
         }
       }
-    };
+    }
+  };
 
-    for (let attempt = 0; attempt < TTS_ATTEMPTS_PER_MODEL; attempt++) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+  const MAX_ATTEMPTS = 4;
+  let lastError = null;
 
-      try {
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': apiKey
-          },
-          body: JSON.stringify(payload),
-          signal
-        });
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          const errorMessage = errorData.error?.message || `HTTP error! status: ${response.status}`;
-          const error = new Error(errorMessage);
-          error.status = response.status;
-          error.retryAfterHeader = response.headers.get('Retry-After');
-          throw error;
-        }
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey
+        },
+        body: JSON.stringify(payload),
+        signal
+      });
 
-        const result = await response.json();
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.error?.message || `HTTP error! status: ${response.status}`;
+        const error = new Error(errorMessage);
+        error.status = response.status;
+        error.retryAfterHeader = response.headers.get('Retry-After');
+        throw error;
+      }
 
-        if (result.error) {
-          throw new Error(result.error.message || `API Error Code: ${result.error.code}`);
-        }
+      const result = await response.json();
 
-        const candidate = result.candidates?.[0];
-        if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
-          throw new Error(`음성 생성이 비정상 종료되었습니다 (finishReason: ${candidate.finishReason}). 해당 청크의 음성이 불완전할 수 있습니다.`);
-        }
+      if (result.error) {
+        throw new Error(result.error.message || `API Error Code: ${result.error.code}`);
+      }
 
-        const part = candidate?.content?.parts?.[0];
-        if (!part) {
-          throw new Error('Gemini API가 콘텐츠를 반환하지 않았습니다. 입력 텍스트 또는 설정을 확인하세요.');
-        }
+      const candidate = result.candidates?.[0];
+      if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
+        throw new Error(`음성 생성이 비정상 종료되었습니다 (finishReason: ${candidate.finishReason}). 해당 청크의 음성이 불완전할 수 있습니다.`);
+      }
 
-        if (part.inlineData) {
-          return { mimeType: part.inlineData.mimeType, base64Data: part.inlineData.data };
-        } else if (part.text) {
-          throw new Error(`모델이 음성이 아닌 텍스트 결과를 반환했습니다. 선택한 모델(${currentModel})이 Native Audio Modality(AUDIO 출력)를 지원하는지 확인하세요.`);
-        } else {
-          throw new Error('Gemini API 응답 형식이 지원되지 않는 구조입니다.');
-        }
-      } catch (error) {
-        if (error.name === 'AbortError') throw error;
-        lastError = error;
+      const part = candidate?.content?.parts?.[0];
+      if (!part) {
+        throw new Error('Gemini API가 콘텐츠를 반환하지 않았습니다. 입력 텍스트 또는 설정을 확인하세요.');
+      }
 
-        const isQuota = error.status === 429;
-        const canRetry = retryableStatuses.has(error.status) || /internal error|temporarily|unavailable/i.test(error.message || '');
-        const isLastAttemptForModel = attempt === TTS_ATTEMPTS_PER_MODEL - 1;
+      if (part.inlineData) {
+        return {
+          mimeType: part.inlineData.mimeType,
+          base64Data: part.inlineData.data
+        };
+      } else if (part.text) {
+        throw new Error(`모델이 음성이 아닌 텍스트 결과를 반환했습니다. 선택한 모델(${model})이 Native Audio Modality(AUDIO 출력)를 지원하는지 확인하세요.`);
+      } else {
+        throw new Error('Gemini API 응답 형식이 지원되지 않는 구조입니다.');
+      }
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      lastError = error;
 
-        if (!canRetry) break; // non-retryable: skip to next model
-        if (isLastAttemptForModel) break; // exhausted attempts for this model
+      const isQuota = error.status === 429;
+      const canRetry = retryableStatuses.has(error.status) || /internal error|temporarily|unavailable/i.test(error.message || '');
+      if (!canRetry || attempt === MAX_ATTEMPTS - 1) break;
 
-        if (isQuota) {
-          const fromHeader = parseFloat(error.retryAfterHeader);
-          const fromMsg = parseFloat((error.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
-          const delaySec = (isFinite(fromHeader) && fromHeader > 0) ? fromHeader
-                         : (isFinite(fromMsg) && fromMsg > 0) ? fromMsg
-                         : 30;
-          const waitSec = Math.ceil(delaySec) + 2;
-          showNotification(`요청 한도 초과. ${waitSec}초 후 자동 재시도합니다 (${attempt + 1}/${TTS_ATTEMPTS_PER_MODEL}회)…`, 'warning');
-          await sleep(waitSec * 1000, signal);
-        } else {
-          await sleep(600 * Math.pow(2, attempt), signal);
-        }
+      let delaySec;
+      if (isQuota) {
+        // Prefer Retry-After header, then parse "retry in X.Xs" from message body
+        const fromHeader = parseFloat(error.retryAfterHeader);
+        const fromMsg = parseFloat((error.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
+        delaySec = (isFinite(fromHeader) && fromHeader > 0) ? fromHeader
+                 : (isFinite(fromMsg)    && fromMsg    > 0) ? fromMsg
+                 : 30;
+        const waitSec = Math.ceil(delaySec) + 2; // +2s buffer
+        showNotification(`요청 한도 초과. ${waitSec}초 후 자동 재시도합니다 (${attempt + 1}/${MAX_ATTEMPTS - 1}회)…`, 'warning');
+        await sleep(waitSec * 1000, signal);
+      } else {
+        await sleep(600 * Math.pow(2, attempt), signal);
       }
     }
   }
 
-  console.error('Gemini TTS API Call Failure:', lastError);
+  console.error('Gemini REST API Call Failure:', lastError);
   if (lastError?.status === 429) {
-    throw new Error('모든 TTS 모델의 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.');
+    const fromMsg = parseFloat((lastError.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
+    const waitHint = isFinite(fromMsg) ? `약 ${Math.ceil(fromMsg)}초 후 다시 시도하거나 ` : '';
+    throw new Error(`요청 한도를 초과했습니다. ${waitHint}Gemini 2.5 Flash TTS 모델로 전환해보세요.`);
   }
   if (/internal error/i.test(lastError?.message || '')) {
-    throw new Error('Gemini TTS 서버 내부 오류가 반복되었습니다. 잠시 후 다시 시도하거나 입력 청크를 더 짧게 나눠보세요.');
+    throw new Error(`Gemini TTS 서버 내부 오류가 반복되었습니다. 잠시 후 다시 시도하거나 입력 청크를 더 짧게 나눠보세요.`);
   }
   throw lastError;
 }
@@ -1403,6 +1405,7 @@ const state = {
   apiKey: '',
   voice: 'Kore',
   styleHint: '',
+  configSnapshot: { voice: 'Kore', styleHint: '' },
   transformAbortController: null,
   parseRequestId: 0,
   isTransforming: false
@@ -1410,6 +1413,17 @@ const state = {
 
 // Instantiate Playback Queue Manager
 const queue = new QueueManager();
+
+function flushAudioBuffers() {
+  if (queue.segments.length > 0) {
+    queue.stop();
+    queue.segments.forEach(seg => {
+      seg.audioBuffer = null;
+      if (seg.state === 'ready' || seg.state === 'generating') seg.state = 'idle';
+    });
+  }
+  state.configSnapshot = { voice: state.voice, styleHint: state.styleHint };
+}
 
 // DOM Elements
 const elements = {
@@ -1744,20 +1758,10 @@ function setupSettings() {
     });
   };
 
-  // Flush cached audio when voice/style is committed so next playback uses new settings
-  const flushAudioBuffers = () => {
-    if (queue.segments.length > 0) {
-      queue.stop();
-      queue.segments.forEach(seg => {
-        seg.audioBuffer = null;
-        if (seg.state === 'ready' || seg.state === 'generating') seg.state = 'idle';
-      });
-    }
-  };
-
+  // Voice change is discrete: flush cached audio immediately
   elements.selectVoice.addEventListener('change', () => { syncConfig(); flushAudioBuffers(); });
+  // Style hint: sync config live; flush happens at play time if config drifted
   elements.inputStyleHint.addEventListener('input', syncConfig);
-  elements.inputStyleHint.addEventListener('change', () => { syncConfig(); flushAudioBuffers(); });
 
   // Trigger sync on loaded
   syncConfig();
@@ -1825,6 +1829,7 @@ async function triggerParsing() {
     const parseResult = parseMarkdown(transformedText);
     state.segments = parseResult.segments;
     queue.setSegments(state.segments);
+    state.configSnapshot = { voice: state.voice, styleHint: state.styleHint };
     renderPreview(parseResult.html, parseResult.segments);
     showNotification('Gemini 3.5 구조 변환이 완료되었습니다.', 'success');
     return true;
@@ -1848,11 +1853,12 @@ async function triggerParsing() {
 
 
 function setTransformingUi(isTransforming) {
-  elements.btnPlayPause.disabled  = isTransforming;
-  elements.btnStop.disabled       = isTransforming;
-  elements.btnNext.disabled       = isTransforming;
-  elements.btnPrev.disabled       = isTransforming;
-  elements.speedInput.disabled    = isTransforming;
+  elements.btnPlayPause.disabled = isTransforming;
+  elements.btnStop.disabled      = isTransforming;
+  elements.btnNext.disabled      = isTransforming;
+  elements.btnPrev.disabled      = isTransforming;
+  elements.progressBar.disabled  = isTransforming;
+  elements.speedInput.disabled   = isTransforming;
 
   if (isTransforming) {
     elements.statusBadge.className = 'status-badge generating';
@@ -2023,6 +2029,10 @@ function setupPlayerControls() {
     if (queue.status === 'playing' || queue.status === 'buffering') {
       queue.pause();
     } else {
+      // Flush stale buffers if voice/style changed since last play (e.g. typed style then clicked play)
+      if (state.voice !== state.configSnapshot.voice || state.styleHint !== state.configSnapshot.styleHint) {
+        flushAudioBuffers();
+      }
       queue.play();
     }
   });
@@ -2072,7 +2082,7 @@ function setupQueueListeners() {
     }
     
     // Status text details
-    let label = '대기 중';
+    let label = '대기';
     if (status === 'generating') label = '음성 생성 중...';
     if (status === 'buffering') label = '버퍼링 중...';
     if (status === 'playing') label = '재생 중';

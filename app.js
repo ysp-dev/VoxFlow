@@ -1684,6 +1684,7 @@ async function triggerParsing() {
   }
 
   if (!sourceText) {
+    state.transformAbortController = null;
     state.segments = [];
     queue.setSegments([]);
     renderPreview('', []);
@@ -1691,6 +1692,7 @@ async function triggerParsing() {
   }
 
   if (!state.apiKey) {
+    state.transformAbortController = null;
     showNotification('Gemini 3.5 구조 변환을 위해 API Key를 먼저 저장해주세요.', 'warning');
     state.segments = [];
     queue.setSegments([]);
@@ -1801,6 +1803,7 @@ function renderPreview(htmlContent, segments) {
     
     // Add Click listener to jump and play
     item.addEventListener('click', () => {
+      if (state.isTransforming) return;
       queue.jumpToSegment(index);
     });
     
@@ -1811,6 +1814,7 @@ function renderPreview(htmlContent, segments) {
   const previewBlocks = elements.previewBody.querySelectorAll('.preview-block');
   previewBlocks.forEach(block => {
     block.addEventListener('click', () => {
+      if (state.isTransforming) return;
       const segId = parseInt(block.getAttribute('data-segment-id'), 10);
       const segmentIndex = segments.findIndex(s => s.id === segId);
       if (segmentIndex !== -1) {

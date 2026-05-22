@@ -368,6 +368,33 @@ async function countdownWait(totalSec, labelPrefix, signal) {
   setSkeletonLabel('Gemini 3.5가 문서를 TTS 구조로 변환하는 중입니다…');
 }
 
+async function countdownToast(totalSec, labelPrefix, signal) {
+  let container = document.getElementById('notification-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'notification-container';
+    container.setAttribute('role', 'status');
+    container.setAttribute('aria-live', 'polite');
+    container.setAttribute('aria-atomic', 'false');
+    container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement('div');
+  toast.style.cssText = 'background:#fffbeb;border:1px solid rgba(245,158,11,0.3);color:#d97706;padding:12px 16px;border-radius:8px;font-size:13px;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,0.12);pointer-events:auto;';
+  container.appendChild(toast);
+  try {
+    for (let remaining = totalSec; remaining > 0; remaining--) {
+      if (signal?.aborted) break;
+      toast.textContent = `${labelPrefix} — ${remaining}초 후 재시도`;
+      await sleep(1000, signal);
+    }
+  } finally {
+    toast.style.transition = 'opacity 0.3s';
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 300);
+  }
+}
+
 async function transformChunkWithFallback(rawText, { apiKey, signal = null, prevTail = '' } = {}) {
   const retryable = new Set([429, 500, 502, 503, 504]);
   let lastError = null;
@@ -471,7 +498,6 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
   const userText = transformRules + contextNote + '\n\n원문:\n' + rawText;
 
   const payload = {
-    model,
     contents: [{ parts: [{ text: userText }] }],
     systemInstruction: { parts: [{ text: systemText }] },
     generationConfig: {
@@ -539,7 +565,6 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
     }
 
     const payload = {
-      model: currentModel,
       contents: [{ parts: [{ text }] }],
       systemInstruction: { parts: [{ text: systemText }] },
       generationConfig: {
@@ -616,8 +641,7 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
                          : (isFinite(fromMsg) && fromMsg > 0) ? fromMsg
                          : 30;
           const waitSec = Math.ceil(delaySec) + 2;
-          showNotification(`요청 한도 초과. ${waitSec}초 후 자동 재시도합니다 (${attempt + 1}/${TTS_ATTEMPTS_PER_MODEL}회)…`, 'warning');
-          await sleep(waitSec * 1000, signal);
+          await countdownToast(waitSec, `TTS 한도 초과 (${attempt + 1}/${TTS_ATTEMPTS_PER_MODEL}회)`, signal);
         } else {
           await sleep(600 * Math.pow(2, attempt), signal);
         }
@@ -1102,7 +1126,7 @@ class QueueManager {
       this.currentSourceNode.onended = null;
       this.currentSourceNode.stop();
       this.currentSourceNode = null;
-      this.pausedAt += (this.audioCtx.currentTime - this.startTime) * this.playbackRate;
+      this.pausedAt = (this.audioCtx.currentTime - this.startTime) * this.playbackRate;
     }
 
     this.stopProgressTracking();

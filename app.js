@@ -174,8 +174,11 @@ const STRUCTURE_TRANSFORM_MODEL = 'gemini-3.5-flash';
 const MAX_TTS_CHARS = 700;
 const MAX_READY_AUDIO_BUFFERS = 12;
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function sleep(ms, signal = null) {
+  return new Promise((resolve, reject) => {
+    const id = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(id); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+  });
 }
 
 function escapeHtmlText(value) {
@@ -472,9 +475,12 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
   };
 
   const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+  const MAX_ATTEMPTS = 4;
   let lastError = null;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -491,6 +497,7 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
         const errorMessage = errorData.error?.message || `HTTP error! status: ${response.status}`;
         const error = new Error(errorMessage);
         error.status = response.status;
+        error.retryAfterHeader = response.headers.get('Retry-After');
         throw error;
       }
 
@@ -516,23 +523,43 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
           base64Data: part.inlineData.data
         };
       } else if (part.text) {
-        throw new Error(`모델이 음성이 아닌 텍스트 결과를 반환했습니다. 선택한 모델(${model})이 Native Audio Modality(AUDIO 출력)를 지원하는지 확인하세요. 반환된 텍스트: "${part.text}"`);
+        throw new Error(`모델이 음성이 아닌 텍스트 결과를 반환했습니다. 선택한 모델(${model})이 Native Audio Modality(AUDIO 출력)를 지원하는지 확인하세요.`);
       } else {
         throw new Error('Gemini API 응답 형식이 지원되지 않는 구조입니다.');
       }
     } catch (error) {
+      if (error.name === 'AbortError') throw error;
       lastError = error;
+
+      const isQuota = error.status === 429;
       const canRetry = retryableStatuses.has(error.status) || /internal error|temporarily|unavailable/i.test(error.message || '');
-      if (!canRetry || attempt === 2) {
-        break;
+      if (!canRetry || attempt === MAX_ATTEMPTS - 1) break;
+
+      let delaySec;
+      if (isQuota) {
+        // Prefer Retry-After header, then parse "retry in X.Xs" from message body
+        const fromHeader = parseFloat(error.retryAfterHeader);
+        const fromMsg = parseFloat((error.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
+        delaySec = (isFinite(fromHeader) && fromHeader > 0) ? fromHeader
+                 : (isFinite(fromMsg)    && fromMsg    > 0) ? fromMsg
+                 : 30;
+        const waitSec = Math.ceil(delaySec) + 2; // +2s buffer
+        showNotification(`요청 한도 초과. ${waitSec}초 후 자동 재시도합니다 (${attempt + 1}/${MAX_ATTEMPTS - 1}회)…`, 'warning');
+        await sleep(waitSec * 1000, signal);
+      } else {
+        await sleep(600 * Math.pow(2, attempt), signal);
       }
-      await sleep(500 * Math.pow(2, attempt));
     }
   }
 
   console.error('Gemini REST API Call Failure:', lastError);
+  if (lastError?.status === 429) {
+    const fromMsg = parseFloat((lastError.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
+    const waitHint = isFinite(fromMsg) ? `약 ${Math.ceil(fromMsg)}초 후 다시 시도하거나 ` : '';
+    throw new Error(`요청 한도를 초과했습니다. ${waitHint}Gemini 2.5 Flash TTS 모델로 전환해보세요.`);
+  }
   if (/internal error/i.test(lastError?.message || '')) {
-    throw new Error(`Gemini TTS 서버 내부 오류가 반복되었습니다. 잠시 후 다시 시도하거나 입력 청크를 더 짧게 나눠보세요. 사용 모델: ${cleanModel}`);
+    throw new Error(`Gemini TTS 서버 내부 오류가 반복되었습니다. 잠시 후 다시 시도하거나 입력 청크를 더 짧게 나눠보세요.`);
   }
   throw lastError;
 }
@@ -1149,7 +1176,7 @@ class QueueManager {
    * Triggers background prefetching of the next two segments in queue.
    */
   async prefetchNext() {
-    const prefetchCount = 2; // Prefetch upcoming two segments
+    const prefetchCount = 1; // Prefetch 1 segment ahead to reduce API quota pressure
     
     for (let i = 1; i <= prefetchCount; i++) {
       const nextIndex = this.currentIndex + i;

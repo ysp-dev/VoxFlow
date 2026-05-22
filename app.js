@@ -1739,6 +1739,8 @@ async function triggerParsing() {
 function setTransformingUi(isTransforming) {
   elements.btnGenerate.disabled = isTransforming;
   elements.btnPlayPause.disabled = isTransforming;
+  elements.btnNext.disabled = isTransforming;
+  elements.btnPrev.disabled = isTransforming;
   if (isTransforming) {
     elements.statusText.textContent = 'Gemini 3.5 구조 변환 중...';
     elements.btnGenerate.textContent = '구조 변환 중...';
@@ -1881,10 +1883,12 @@ function setupPlayerControls() {
   });
 
   elements.btnNext.addEventListener('click', () => {
+    if (state.isTransforming) return;
     queue.next();
   });
 
   elements.btnPrev.addEventListener('click', () => {
+    if (state.isTransforming) return;
     queue.prev();
   });
 

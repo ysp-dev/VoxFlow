@@ -170,7 +170,8 @@
  * @returns {Promise<{mimeType: string, base64Data: string}>} The audio data structure.
  */
 const DEFAULT_TTS_MODEL = 'gemini-3.1-flash-tts-preview';
-const STRUCTURE_TRANSFORM_MODEL = 'gemini-3.5-flash';
+const STRUCTURE_TRANSFORM_MODELS = ['gemini-3.5-flash', 'gemini-2.5-flash'];
+const STRUCTURE_ATTEMPTS_PER_MODEL = 2;
 const MAX_TTS_CHARS = 700;
 const MAX_READY_AUDIO_BUFFERS = 12;
 
@@ -334,12 +335,12 @@ async function transformTextForTtsStructure(rawText, { apiKey, signal = null } =
     let prevTail = '';
     for (const chunk of chunks) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      results.push(await transformSingleChunk(chunk, { apiKey, signal, prevTail }));
+      results.push(await transformChunkWithFallback(chunk, { apiKey, signal, prevTail }));
       prevTail = chunk.split('\n').slice(-4).join('\n');
     }
     transformed = results.join('\n\n');
   } else {
-    transformed = await transformSingleChunk(rawText, { apiKey, signal });
+    transformed = await transformChunkWithFallback(rawText, { apiKey, signal });
   }
 
   const lossIssues = verifyStructuralPreservation(rawText, transformed);
@@ -350,8 +351,74 @@ async function transformTextForTtsStructure(rawText, { apiKey, signal = null } =
   return transformed;
 }
 
-async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail = '' } = {}) {
-  const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' + STRUCTURE_TRANSFORM_MODEL + ':generateContent';
+function setSkeletonLabel(msg) {
+  const label = document.querySelector('.skeleton-label');
+  if (label) label.innerHTML = `<span class="skeleton-dot"></span>${msg}`;
+}
+
+async function countdownWait(totalSec, labelPrefix, signal) {
+  for (let remaining = totalSec; remaining > 0; remaining--) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    setSkeletonLabel(`${labelPrefix} — ${remaining}초 후 재시도 (취소하려면 위의 버튼 클릭)`);
+    await sleep(1000, signal);
+  }
+  setSkeletonLabel('Gemini 3.5가 문서를 TTS 구조로 변환하는 중입니다…');
+}
+
+async function transformChunkWithFallback(rawText, { apiKey, signal = null, prevTail = '' } = {}) {
+  const retryable = new Set([429, 500, 502, 503, 504]);
+  let lastError = null;
+
+  for (let mi = 0; mi < STRUCTURE_TRANSFORM_MODELS.length; mi++) {
+    const model = STRUCTURE_TRANSFORM_MODELS[mi];
+    if (mi > 0) {
+      const prev = STRUCTURE_TRANSFORM_MODELS[mi - 1];
+      showNotification(`Gemini ${prev} 실패 → Gemini ${model} 로 전환합니다.`, 'warning');
+      setSkeletonLabel(`Gemini ${model} 로 전환하여 변환 중입니다…`);
+    }
+
+    for (let attempt = 0; attempt < STRUCTURE_ATTEMPTS_PER_MODEL; attempt++) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      setSkeletonLabel(`${model} 변환 중… (${attempt + 1}/${STRUCTURE_ATTEMPTS_PER_MODEL}회 시도)`);
+      try {
+        return await transformSingleChunk(rawText, { apiKey, signal, prevTail, model });
+      } catch (err) {
+        if (err.name === 'AbortError') throw err;
+        lastError = err;
+
+        const isRetryable = retryable.has(err.status) || /internal error|temporarily|unavailable/i.test(err.message || '');
+        if (!isRetryable) throw formatTransformError(err);
+
+        const isLastAttemptForModel = attempt === STRUCTURE_ATTEMPTS_PER_MODEL - 1;
+        if (isLastAttemptForModel) break;
+
+        if (err.status === 429) {
+          const fromHeader = parseFloat(err.retryAfterHeader);
+          const fromMsg    = parseFloat((err.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
+          const delaySec   = (isFinite(fromHeader) && fromHeader > 0) ? fromHeader
+                           : (isFinite(fromMsg)    && fromMsg    > 0) ? fromMsg : 30;
+          const waitSec = Math.ceil(delaySec) + 2;
+          await countdownWait(waitSec, `${model} 한도 초과`, signal);
+        } else {
+          await sleep(600 * Math.pow(2, attempt), signal);
+        }
+      }
+    }
+  }
+
+  throw formatTransformError(lastError);
+}
+
+function formatTransformError(err) {
+  if (err?.status === 429) return new Error('모든 모델의 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.');
+  if (/internal error/i.test(err?.message || '')) return new Error('Gemini 서버 오류가 반복됩니다. 잠시 후 다시 시도해주세요.');
+  if (err?.status === 400) return new Error('구조 변환 요청이 거부되었습니다. API Key 또는 입력 내용을 확인해주세요.');
+  if (err?.status === 403) return new Error('API Key 권한이 없습니다. Gemini API 사용 권한을 확인해주세요.');
+  return new Error('구조 변환에 실패했습니다. 네트워크 연결을 확인하고 다시 시도해주세요.');
+}
+
+async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail = '', model = STRUCTURE_TRANSFORM_MODELS[0] } = {}) {
+  const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent';
   const systemText = [
     'You transform source documents into Korean-friendly TTS input.',
     'Return only the transformed text. Do not add commentary, code fences, summaries, or metadata.',
@@ -408,77 +475,40 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     }
   };
 
-  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
-  const MAX_ATTEMPTS = 4;
-  let lastError = null;
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(payload),
+    signal
+  });
 
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body: JSON.stringify(payload),
-        signal
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const err = new Error(errorData.error?.message || `HTTP ${response.status}`);
-        err.status = response.status;
-        err.retryAfterHeader = response.headers.get('Retry-After');
-        throw err;
-      }
-
-      const result = await response.json();
-      const candidate = result.candidates?.[0];
-      const finishReason = candidate?.finishReason;
-      if (finishReason && finishReason !== 'STOP') {
-        throw new Error(`구조 변환이 중간에 중단되었습니다 (${finishReason}). 문서를 더 짧게 나눠 다시 시도해보세요.`);
-      }
-
-      const transformed = candidate?.content?.parts?.map(p => p.text || '').join('').trim();
-      if (!transformed) throw new Error('구조 변환 결과가 비어 있습니다. 입력 내용을 확인해주세요.');
-
-      return transformed;
-    } catch (err) {
-      if (err.name === 'AbortError') throw err;
-      lastError = err;
-
-      const isQuota = err.status === 429;
-      const canRetry = retryableStatuses.has(err.status) || /internal error|temporarily|unavailable/i.test(err.message || '');
-      if (!canRetry || attempt === MAX_ATTEMPTS - 1) break;
-
-      if (isQuota) {
-        const fromHeader = parseFloat(err.retryAfterHeader);
-        const fromMsg    = parseFloat((err.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
-        const delaySec   = (isFinite(fromHeader) && fromHeader > 0) ? fromHeader
-                         : (isFinite(fromMsg)    && fromMsg    > 0) ? fromMsg : 30;
-        const waitSec = Math.ceil(delaySec) + 2;
-        showNotification(`구조 변환 요청 한도 초과. ${waitSec}초 후 자동 재시도합니다 (${attempt + 1}/${MAX_ATTEMPTS - 1}회)…`, 'warning');
-        await sleep(waitSec * 1000, signal);
-      } else {
-        await sleep(600 * Math.pow(2, attempt), signal);
-      }
-    }
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const err = new Error(errorData.error?.message || `HTTP ${response.status}`);
+    err.status = response.status;
+    err.retryAfterHeader = response.headers.get('Retry-After');
+    throw err;
   }
 
-  if (lastError?.status === 429) {
-    const fromMsg = parseFloat((lastError.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
-    const waitHint = isFinite(fromMsg) ? `약 ${Math.ceil(fromMsg)}초 후 다시 시도하거나 ` : '';
-    throw new Error(`구조 변환 요청 한도를 초과했습니다. ${waitHint}잠시 후 다시 시도해주세요.`);
+  const result = await response.json();
+  const candidate = result.candidates?.[0];
+  const finishReason = candidate?.finishReason;
+  if (finishReason && finishReason !== 'STOP') {
+    const err = new Error(`구조 변환이 중간에 중단되었습니다 (${finishReason}). 문서를 더 짧게 나눠 다시 시도해보세요.`);
+    err.status = 0;
+    throw err;
   }
-  if (/internal error/i.test(lastError?.message || '')) {
-    throw new Error('Gemini 3.5 서버 오류가 반복됩니다. 잠시 후 다시 시도해주세요.');
+
+  const transformed = candidate?.content?.parts?.map(p => p.text || '').join('').trim();
+  if (!transformed) {
+    const err = new Error('구조 변환 결과가 비어 있습니다. 입력 내용을 확인해주세요.');
+    err.status = 0;
+    throw err;
   }
-  if (lastError?.status === 400) {
-    throw new Error('구조 변환 요청이 거부되었습니다. API Key가 올바른지, 입력 내용에 금지 콘텐츠가 없는지 확인해주세요.');
-  }
-  if (lastError?.status === 403) {
-    throw new Error('API Key 권한이 없습니다. Gemini API 사용 권한을 확인해주세요.');
-  }
-  throw new Error('구조 변환에 실패했습니다. 네트워크 연결을 확인하고 다시 시도해주세요.');
+
+  return transformed;
 }
 async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice = 'Kore', styleHint = '', signal = null }) {
   if (!apiKey || apiKey.trim() === '') {

@@ -22,7 +22,8 @@
     'book-open': '<path d="M2 4h7a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 4h-7a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h8z"/>',
     'list-music': '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="M3 6h4"/><path d="M3 10h4"/>',
     'loader-2': '<path d="M21 12a9 9 0 1 1-6.2-8.6"/>',
-    'alert-circle': '<circle cx="12" cy="12" r="10"/><path d="M12 8v5"/><path d="M12 16h.01"/>'
+    'alert-circle': '<circle cx="12" cy="12" r="10"/><path d="M12 8v5"/><path d="M12 16h.01"/>',
+    'x-circle': '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>'
   };
 
   function copyInlineStyles(source, target) {
@@ -170,6 +171,8 @@
  * @returns {Promise<{mimeType: string, base64Data: string}>} The audio data structure.
  */
 const DEFAULT_TTS_MODEL = 'gemini-3.1-flash-tts-preview';
+const TTS_FALLBACK_MODELS = ['gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'];
+const TTS_ATTEMPTS_PER_MODEL = 2;
 const STRUCTURE_TRANSFORM_MODELS = ['gemini-3.5-flash', 'gemini-2.5-flash'];
 const STRUCTURE_ATTEMPTS_PER_MODEL = 2;
 const MAX_TTS_CHARS = 700;
@@ -517,120 +520,118 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
     throw new Error('Gemini API Key가 누락되었습니다. 상단 설정 바에서 API Key를 입력해주세요.');
   }
 
-  // Ensure clean model format. Gemini TTS requires a native TTS model variant.
   const cleanModel = model.replace(/^models\//, '') || DEFAULT_TTS_MODEL;
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent`;
+
+  // Build fallback list starting from the user-selected model (forward only)
+  const primaryIdx = TTS_FALLBACK_MODELS.indexOf(cleanModel);
+  const modelsToTry = primaryIdx >= 0 ? TTS_FALLBACK_MODELS.slice(primaryIdx) : [cleanModel];
+
+  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+  let lastError = null;
 
   const systemText = `You are a professional Text-To-Speech narrator. Read the provided text naturally, interpreting inline markers as follows: [pause] = insert a brief pause; [emphasis] = stress the immediately following word or phrase; [cautious] = read the following sentence in a careful, cautionary tone. Remove these markers from the spoken output — do not read them aloud. Do NOT add any preamble, commentary, or filler phrases such as "Sure", "Here is the audio", or "Reading now". Start reading immediately.${styleHint ? ` Speech style: ${styleHint}` : ''}`;
 
-  const payload = {
-    model: cleanModel,
-    contents: [
-      {
-        parts: [{ text }]
-      }
-    ],
-    systemInstruction: {
-      parts: [{ text: systemText }]
-    },
-    generationConfig: {
-      responseModalities: ["AUDIO"],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: {
-            voiceName: voice
+  for (let mi = 0; mi < modelsToTry.length; mi++) {
+    const currentModel = modelsToTry[mi];
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent`;
+
+    if (mi > 0) {
+      showNotification(`TTS ${modelsToTry[mi - 1]} 실패 → ${currentModel} 로 전환합니다.`, 'warning');
+    }
+
+    const payload = {
+      model: currentModel,
+      contents: [{ parts: [{ text }] }],
+      systemInstruction: { parts: [{ text: systemText }] },
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: voice }
           }
         }
       }
-    }
-  };
+    };
 
-  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
-  const MAX_ATTEMPTS = 4;
-  let lastError = null;
+    for (let attempt = 0; attempt < TTS_ATTEMPTS_PER_MODEL; attempt++) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey
+          },
+          body: JSON.stringify(payload),
+          signal
+        });
 
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey
-        },
-        body: JSON.stringify(payload),
-        signal
-      });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          const errorMessage = errorData.error?.message || `HTTP error! status: ${response.status}`;
+          const error = new Error(errorMessage);
+          error.status = response.status;
+          error.retryAfterHeader = response.headers.get('Retry-After');
+          throw error;
+        }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMessage = errorData.error?.message || `HTTP error! status: ${response.status}`;
-        const error = new Error(errorMessage);
-        error.status = response.status;
-        error.retryAfterHeader = response.headers.get('Retry-After');
-        throw error;
-      }
+        const result = await response.json();
 
-      const result = await response.json();
+        if (result.error) {
+          throw new Error(result.error.message || `API Error Code: ${result.error.code}`);
+        }
 
-      if (result.error) {
-        throw new Error(result.error.message || `API Error Code: ${result.error.code}`);
-      }
+        const candidate = result.candidates?.[0];
+        if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
+          throw new Error(`음성 생성이 비정상 종료되었습니다 (finishReason: ${candidate.finishReason}). 해당 청크의 음성이 불완전할 수 있습니다.`);
+        }
 
-      const candidate = result.candidates?.[0];
-      if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
-        throw new Error(`음성 생성이 비정상 종료되었습니다 (finishReason: ${candidate.finishReason}). 해당 청크의 음성이 불완전할 수 있습니다.`);
-      }
+        const part = candidate?.content?.parts?.[0];
+        if (!part) {
+          throw new Error('Gemini API가 콘텐츠를 반환하지 않았습니다. 입력 텍스트 또는 설정을 확인하세요.');
+        }
 
-      const part = candidate?.content?.parts?.[0];
-      if (!part) {
-        throw new Error('Gemini API가 콘텐츠를 반환하지 않았습니다. 입력 텍스트 또는 설정을 확인하세요.');
-      }
+        if (part.inlineData) {
+          return { mimeType: part.inlineData.mimeType, base64Data: part.inlineData.data };
+        } else if (part.text) {
+          throw new Error(`모델이 음성이 아닌 텍스트 결과를 반환했습니다. 선택한 모델(${currentModel})이 Native Audio Modality(AUDIO 출력)를 지원하는지 확인하세요.`);
+        } else {
+          throw new Error('Gemini API 응답 형식이 지원되지 않는 구조입니다.');
+        }
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        lastError = error;
 
-      if (part.inlineData) {
-        return {
-          mimeType: part.inlineData.mimeType,
-          base64Data: part.inlineData.data
-        };
-      } else if (part.text) {
-        throw new Error(`모델이 음성이 아닌 텍스트 결과를 반환했습니다. 선택한 모델(${model})이 Native Audio Modality(AUDIO 출력)를 지원하는지 확인하세요.`);
-      } else {
-        throw new Error('Gemini API 응답 형식이 지원되지 않는 구조입니다.');
-      }
-    } catch (error) {
-      if (error.name === 'AbortError') throw error;
-      lastError = error;
+        const isQuota = error.status === 429;
+        const canRetry = retryableStatuses.has(error.status) || /internal error|temporarily|unavailable/i.test(error.message || '');
+        const isLastAttemptForModel = attempt === TTS_ATTEMPTS_PER_MODEL - 1;
 
-      const isQuota = error.status === 429;
-      const canRetry = retryableStatuses.has(error.status) || /internal error|temporarily|unavailable/i.test(error.message || '');
-      if (!canRetry || attempt === MAX_ATTEMPTS - 1) break;
+        if (!canRetry) break; // non-retryable: skip to next model
+        if (isLastAttemptForModel) break; // exhausted attempts for this model
 
-      let delaySec;
-      if (isQuota) {
-        // Prefer Retry-After header, then parse "retry in X.Xs" from message body
-        const fromHeader = parseFloat(error.retryAfterHeader);
-        const fromMsg = parseFloat((error.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
-        delaySec = (isFinite(fromHeader) && fromHeader > 0) ? fromHeader
-                 : (isFinite(fromMsg)    && fromMsg    > 0) ? fromMsg
-                 : 30;
-        const waitSec = Math.ceil(delaySec) + 2; // +2s buffer
-        showNotification(`요청 한도 초과. ${waitSec}초 후 자동 재시도합니다 (${attempt + 1}/${MAX_ATTEMPTS - 1}회)…`, 'warning');
-        await sleep(waitSec * 1000, signal);
-      } else {
-        await sleep(600 * Math.pow(2, attempt), signal);
+        if (isQuota) {
+          const fromHeader = parseFloat(error.retryAfterHeader);
+          const fromMsg = parseFloat((error.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
+          const delaySec = (isFinite(fromHeader) && fromHeader > 0) ? fromHeader
+                         : (isFinite(fromMsg) && fromMsg > 0) ? fromMsg
+                         : 30;
+          const waitSec = Math.ceil(delaySec) + 2;
+          showNotification(`요청 한도 초과. ${waitSec}초 후 자동 재시도합니다 (${attempt + 1}/${TTS_ATTEMPTS_PER_MODEL}회)…`, 'warning');
+          await sleep(waitSec * 1000, signal);
+        } else {
+          await sleep(600 * Math.pow(2, attempt), signal);
+        }
       }
     }
   }
 
-  console.error('Gemini REST API Call Failure:', lastError);
+  console.error('Gemini TTS API Call Failure:', lastError);
   if (lastError?.status === 429) {
-    const fromMsg = parseFloat((lastError.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
-    const waitHint = isFinite(fromMsg) ? `약 ${Math.ceil(fromMsg)}초 후 다시 시도하거나 ` : '';
-    throw new Error(`요청 한도를 초과했습니다. ${waitHint}Gemini 2.5 Flash TTS 모델로 전환해보세요.`);
+    throw new Error('모든 TTS 모델의 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.');
   }
   if (/internal error/i.test(lastError?.message || '')) {
-    throw new Error(`Gemini TTS 서버 내부 오류가 반복되었습니다. 잠시 후 다시 시도하거나 입력 청크를 더 짧게 나눠보세요.`);
+    throw new Error('Gemini TTS 서버 내부 오류가 반복되었습니다. 잠시 후 다시 시도하거나 입력 청크를 더 짧게 나눠보세요.');
   }
   throw lastError;
 }
@@ -1400,7 +1401,6 @@ const state = {
   currentFile: null,
   segments: [],
   apiKey: '',
-  model: DEFAULT_TTS_MODEL,
   voice: 'Kore',
   styleHint: '',
   transformAbortController: null,
@@ -1435,7 +1435,6 @@ const elements = {
   fileSize: document.getElementById('file-size'),
   btnRemoveFile: document.getElementById('btn-remove-file'),
   
-  selectModel: document.getElementById('select-model'),
   selectVoice: document.getElementById('select-voice'),
   inputStyleHint: document.getElementById('input-style-hint'),
   
@@ -1713,6 +1712,13 @@ function setupTextareaCounter() {
   });
 
   elements.btnGenerate.addEventListener('click', async () => {
+    if (state.isTransforming) {
+      cancelTransform();
+      state.segments = [];
+      queue.setSegments([]);
+      renderPreview('', []);
+      return;
+    }
     await triggerParsing();
   });
 }
@@ -1723,27 +1729,21 @@ function setupTextareaCounter() {
 
 function setupSettings() {
   // Sync initial configuration values
-  state.model = elements.selectModel.value;
   state.voice = elements.selectVoice.value;
   state.styleHint = elements.inputStyleHint.value;
 
   // Key sync helper
   const syncConfig = () => {
-    const activeModel = elements.selectModel.value || DEFAULT_TTS_MODEL;
-    
-    state.model = activeModel;
     state.voice = elements.selectVoice.value;
     state.styleHint = elements.inputStyleHint.value.trim();
 
     queue.setConfig({
       apiKey: state.apiKey,
-      model: state.model,
       voice: state.voice,
       styleHint: state.styleHint
     });
   };
 
-  elements.selectModel.addEventListener('change', syncConfig);
   elements.selectVoice.addEventListener('change', syncConfig);
   elements.inputStyleHint.addEventListener('input', syncConfig);
 
@@ -1851,6 +1851,8 @@ function setTransformingUi(isTransforming) {
     elements.btnCancelTransform.classList.remove('hidden');
     elements.btnCancelTransform.onclick = () => {
       cancelTransform();
+      state.segments = [];
+      queue.setSegments([]);
       renderPreview('', []);
     };
 
@@ -1858,10 +1860,6 @@ function setTransformingUi(isTransforming) {
     elements.btnGenerate.disabled = false;
     elements.btnGenerate.classList.add('btn-cancel');
     elements.btnGenerate.innerHTML = '<i data-lucide="x-circle" style="width:14px;height:14px;"></i> 변환 취소';
-    elements.btnGenerate.onclick = () => {
-      cancelTransform();
-      renderPreview('', []);
-    };
     if (window.lucide) window.lucide.createIcons();
 
     elements.previewBody.classList.remove('hidden');
@@ -1885,7 +1883,6 @@ function setTransformingUi(isTransforming) {
     elements.btnCancelTransform.onclick = null;
 
     elements.btnGenerate.classList.remove('btn-cancel');
-    elements.btnGenerate.onclick = null;
     elements.btnGenerate.disabled = false;
     elements.btnGenerate.innerHTML = '<i data-lucide="sparkles"></i> 텍스트 분석 및 플레이리스트 생성';
     if (window.lucide) window.lucide.createIcons();

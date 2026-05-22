@@ -1410,6 +1410,7 @@ const elements = {
   visualizer: document.getElementById('visualizer-canvas'),
   statusBadge: document.getElementById('status-badge'),
   statusText: document.getElementById('status-text'),
+  btnCancelTransform: document.getElementById('btn-cancel-transform'),
   segmentCounter: document.getElementById('segment-counter'),
   
   btnPrev: document.getElementById('btn-prev'),
@@ -1804,13 +1805,24 @@ async function triggerParsing() {
 
 function setTransformingUi(isTransforming) {
   elements.btnPlayPause.disabled = isTransforming;
-  elements.btnNext.disabled = isTransforming;
-  elements.btnPrev.disabled = isTransforming;
+  elements.btnStop.disabled      = isTransforming;
+  elements.btnNext.disabled      = isTransforming;
+  elements.btnPrev.disabled      = isTransforming;
+  elements.progressBar.disabled  = isTransforming;
+  elements.speedInput.disabled   = isTransforming;
 
   if (isTransforming) {
     elements.statusBadge.className = 'status-badge generating';
     elements.statusText.textContent = 'Gemini 3.5 변환 중';
 
+    // Dedicated cancel button (always visible in visualizer header)
+    elements.btnCancelTransform.classList.remove('hidden');
+    elements.btnCancelTransform.onclick = () => {
+      cancelTransform();
+      renderPreview('', []);
+    };
+
+    // Also update the generate button if it happens to be visible (text tab)
     elements.btnGenerate.disabled = false;
     elements.btnGenerate.classList.add('btn-cancel');
     elements.btnGenerate.innerHTML = '<i data-lucide="x-circle" style="width:14px;height:14px;"></i> 변환 취소';
@@ -1836,6 +1848,9 @@ function setTransformingUi(isTransforming) {
   } else {
     elements.statusBadge.className = `status-badge ${queue.status === 'idle' ? 'idle' : queue.status}`;
     elements.statusText.textContent = queue.status === 'idle' ? '대기 중' : elements.statusText.textContent;
+
+    elements.btnCancelTransform.classList.add('hidden');
+    elements.btnCancelTransform.onclick = null;
 
     elements.btnGenerate.classList.remove('btn-cancel');
     elements.btnGenerate.onclick = null;
@@ -1994,11 +2009,7 @@ function setupPlayerControls() {
 
   // Real-time speech rate adjustment
   elements.speedInput.addEventListener('change', (e) => {
-    let rate = parseFloat(e.target.value);
-    if (isNaN(rate) || rate < 0.5) rate = 0.5;
-    if (rate > 2.0) rate = 2.0;
-    e.target.value = rate.toFixed(1);
-    queue.setPlaybackRate(rate);
+    queue.setPlaybackRate(parseFloat(e.target.value));
   });
 }
 

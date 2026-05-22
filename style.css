@@ -724,8 +724,25 @@ header {
   color: var(--text-secondary);
 }
 
-.speed-control-badge input {
-  width: 40px;
+.speed-select {
+  background: transparent;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  cursor: pointer;
+  outline: none;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  text-align: center;
+  width: 36px;
+}
+
+.speed-select:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .controls-center-group {
@@ -1025,6 +1042,28 @@ header {
 
 .animate-spin {
   animation: spin 1s linear infinite;
+}
+
+/* Dedicated cancel button in visualizer header */
+.btn-cancel-transform {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-sans);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.btn-cancel-transform:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.6);
 }
 
 /* Cancel state for generate button */

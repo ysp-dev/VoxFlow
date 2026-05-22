@@ -1744,8 +1744,20 @@ function setupSettings() {
     });
   };
 
-  elements.selectVoice.addEventListener('change', syncConfig);
+  // Flush cached audio when voice/style is committed so next playback uses new settings
+  const flushAudioBuffers = () => {
+    if (queue.segments.length > 0) {
+      queue.stop();
+      queue.segments.forEach(seg => {
+        seg.audioBuffer = null;
+        if (seg.state === 'ready' || seg.state === 'generating') seg.state = 'idle';
+      });
+    }
+  };
+
+  elements.selectVoice.addEventListener('change', () => { syncConfig(); flushAudioBuffers(); });
   elements.inputStyleHint.addEventListener('input', syncConfig);
+  elements.inputStyleHint.addEventListener('change', () => { syncConfig(); flushAudioBuffers(); });
 
   // Trigger sync on loaded
   syncConfig();
@@ -1836,12 +1848,11 @@ async function triggerParsing() {
 
 
 function setTransformingUi(isTransforming) {
-  elements.btnPlayPause.disabled = isTransforming;
-  elements.btnStop.disabled      = isTransforming;
-  elements.btnNext.disabled      = isTransforming;
-  elements.btnPrev.disabled      = isTransforming;
-  elements.progressBar.disabled  = isTransforming;
-  elements.speedInput.disabled   = isTransforming;
+  elements.btnPlayPause.disabled  = isTransforming;
+  elements.btnStop.disabled       = isTransforming;
+  elements.btnNext.disabled       = isTransforming;
+  elements.btnPrev.disabled       = isTransforming;
+  elements.speedInput.disabled    = isTransforming;
 
   if (isTransforming) {
     elements.statusBadge.className = 'status-badge generating';

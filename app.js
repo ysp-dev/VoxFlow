@@ -408,38 +408,77 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     }
   };
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey
-    },
-    body: JSON.stringify(payload),
-    signal
-  });
+  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+  const MAX_ATTEMPTS = 4;
+  let lastError = null;
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error?.message || 'Gemini 3.5 구조 변환 실패: HTTP ' + response.status);
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify(payload),
+        signal
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const err = new Error(errorData.error?.message || `HTTP ${response.status}`);
+        err.status = response.status;
+        err.retryAfterHeader = response.headers.get('Retry-After');
+        throw err;
+      }
+
+      const result = await response.json();
+      const candidate = result.candidates?.[0];
+      const finishReason = candidate?.finishReason;
+      if (finishReason && finishReason !== 'STOP') {
+        throw new Error(`구조 변환이 중간에 중단되었습니다 (${finishReason}). 문서를 더 짧게 나눠 다시 시도해보세요.`);
+      }
+
+      const transformed = candidate?.content?.parts?.map(p => p.text || '').join('').trim();
+      if (!transformed) throw new Error('구조 변환 결과가 비어 있습니다. 입력 내용을 확인해주세요.');
+
+      return transformed;
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+      lastError = err;
+
+      const isQuota = err.status === 429;
+      const canRetry = retryableStatuses.has(err.status) || /internal error|temporarily|unavailable/i.test(err.message || '');
+      if (!canRetry || attempt === MAX_ATTEMPTS - 1) break;
+
+      if (isQuota) {
+        const fromHeader = parseFloat(err.retryAfterHeader);
+        const fromMsg    = parseFloat((err.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
+        const delaySec   = (isFinite(fromHeader) && fromHeader > 0) ? fromHeader
+                         : (isFinite(fromMsg)    && fromMsg    > 0) ? fromMsg : 30;
+        const waitSec = Math.ceil(delaySec) + 2;
+        showNotification(`구조 변환 요청 한도 초과. ${waitSec}초 후 자동 재시도합니다 (${attempt + 1}/${MAX_ATTEMPTS - 1}회)…`, 'warning');
+        await sleep(waitSec * 1000, signal);
+      } else {
+        await sleep(600 * Math.pow(2, attempt), signal);
+      }
+    }
   }
 
-  const result = await response.json();
-  const candidate = result.candidates?.[0];
-  const finishReason = candidate?.finishReason;
-  if (finishReason && finishReason !== 'STOP') {
-    throw new Error(`Gemini 3.5 구조 변환이 완전히 완료되지 않았습니다 (finishReason: ${finishReason}). 원본 정보가 누락되었을 수 있습니다.`);
+  if (lastError?.status === 429) {
+    const fromMsg = parseFloat((lastError.message || '').match(/retry in (\d+\.?\d*)\s*s/i)?.[1]);
+    const waitHint = isFinite(fromMsg) ? `약 ${Math.ceil(fromMsg)}초 후 다시 시도하거나 ` : '';
+    throw new Error(`구조 변환 요청 한도를 초과했습니다. ${waitHint}잠시 후 다시 시도해주세요.`);
   }
-
-  const transformed = candidate?.content?.parts
-    ?.map(part => part.text || '')
-    .join('')
-    .trim();
-
-  if (!transformed) {
-    throw new Error('Gemini 3.5 구조 변환 결과가 비어 있습니다.');
+  if (/internal error/i.test(lastError?.message || '')) {
+    throw new Error('Gemini 3.5 서버 오류가 반복됩니다. 잠시 후 다시 시도해주세요.');
   }
-
-  return transformed;
+  if (lastError?.status === 400) {
+    throw new Error('구조 변환 요청이 거부되었습니다. API Key가 올바른지, 입력 내용에 금지 콘텐츠가 없는지 확인해주세요.');
+  }
+  if (lastError?.status === 403) {
+    throw new Error('API Key 권한이 없습니다. Gemini API 사용 권한을 확인해주세요.');
+  }
+  throw new Error('구조 변환에 실패했습니다. 네트워크 연결을 확인하고 다시 시도해주세요.');
 }
 async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice = 'Kore', styleHint = '', signal = null }) {
   if (!apiKey || apiKey.trim() === '') {
@@ -1751,7 +1790,7 @@ async function triggerParsing() {
     state.segments = [];
     queue.setSegments([]);
     renderPreview('', []);
-    showNotification('구조 변환 실패: ' + err.message);
+    showNotification(err.message || '구조 변환에 실패했습니다. 다시 시도해주세요.', 'error');
     return false;
   } finally {
     if (parseRequestId === state.parseRequestId) {

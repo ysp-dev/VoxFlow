@@ -2061,7 +2061,7 @@ function setupQueueListeners() {
     }
     
     // Status text details
-    let label = '대기';
+    let label = '대기 중';
     if (status === 'generating') label = '음성 생성 중...';
     if (status === 'buffering') label = '버퍼링 중...';
     if (status === 'playing') label = '재생 중';

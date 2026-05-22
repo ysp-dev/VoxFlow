@@ -1,11 +1,1129 @@
+'use strict';
+
+(function () {
+  const fence = String.fromCharCode(96, 96, 96);
+  const iconPaths = {
+    'waves': '<path d="M2 12c3-5 5 5 8 0s5-5 8 0 5 5 8 0"/><path d="M2 6c3-5 5 5 8 0s5-5 8 0 5 5 8 0"/><path d="M2 18c3-5 5 5 8 0s5-5 8 0 5 5 8 0"/>',
+    'key-round': '<path d="M2 18l6-6"/><circle cx="14" cy="10" r="6"/><path d="M8 18l3 3"/><path d="M11 15l3 3"/>',
+    'lock': '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    'file-text': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/>',
+    'align-left': '<path d="M3 6h18"/><path d="M3 12h14"/><path d="M3 18h18"/>',
+    'cloud-upload': '<path d="M12 13v8"/><path d="M8 17l4-4 4 4"/><path d="M20 16.6A5 5 0 0 0 18 7h-1.3A8 8 0 1 0 4 15.3"/>',
+    'file-check': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/>',
+    'trash-2': '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+    'sparkles': '<path d="M12 3l1.6 5.2L19 10l-5.4 1.8L12 17l-1.6-5.2L5 10l5.4-1.8z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/>',
+    'gauge': '<path d="M4 14a8 8 0 1 1 16 0"/><path d="M12 14l4-4"/><path d="M5 19h14"/>',
+    'skip-back': '<path d="M19 20L9 12l10-8v16z"/><path d="M5 19V5"/>',
+    'play': '<path d="M8 5v14l11-7z"/>',
+    'pause': '<path d="M8 5h4v14H8z"/><path d="M16 5h4v14h-4z"/>',
+    'skip-forward': '<path d="M5 4l10 8-10 8V4z"/><path d="M19 5v14"/>',
+    'square': '<rect x="6" y="6" width="12" height="12" rx="1"/>',
+    'volume-2': '<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/>',
+    'book-open': '<path d="M2 4h7a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 4h-7a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h8z"/>',
+    'list-music': '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="M3 6h4"/><path d="M3 10h4"/>',
+    'loader-2': '<path d="M21 12a9 9 0 1 1-6.2-8.6"/>',
+    'alert-circle': '<circle cx="12" cy="12" r="10"/><path d="M12 8v5"/><path d="M12 16h.01"/>'
+  };
+
+  function copyInlineStyles(source, target) {
+    const style = source.getAttribute('style');
+    if (style) target.setAttribute('style', style);
+    target.className.baseVal = source.className || '';
+  }
+
+  window.lucide = {
+    createIcons() {
+      document.querySelectorAll('i[data-lucide]').forEach((node) => {
+        const name = node.getAttribute('data-lucide');
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('width', '24');
+        svg.setAttribute('height', '24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.innerHTML = iconPaths[name] || '<circle cx="12" cy="12" r="9"/>';
+        copyInlineStyles(node, svg);
+        node.replaceWith(svg);
+      });
+    }
+  };
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function inlineMarkdown(value) {
+    return escapeHtml(value)
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+      .replace(/\x60([^\x60]+)\x60/g, '<code>$1</code>');
+  }
+
+  function flushList(state, out) {
+    if (state.listItems.length) {
+      out.push('<ul>' + state.listItems.map((item) => '<li>' + inlineMarkdown(item) + '</li>').join('') + '</ul>');
+      state.listItems = [];
+    }
+  }
+
+  function parseBasicMarkdown(markdown) {
+    const lines = String(markdown || '').replace(/\r\n?/g, '\n').split('\n');
+    const out = [];
+    const state = { listItems: [], paragraph: [], code: [], inCode: false };
+
+    function flushParagraph() {
+      if (state.paragraph.length) {
+        out.push('<p>' + inlineMarkdown(state.paragraph.join(' ')) + '</p>');
+        state.paragraph = [];
+      }
+    }
+
+    for (const rawLine of lines) {
+      const line = rawLine.replace(/\s+$/g, '');
+      if (line.trim().startsWith(fence)) {
+        flushParagraph();
+        flushList(state, out);
+        if (state.inCode) {
+          out.push('<pre><code>' + escapeHtml(state.code.join('\n')) + '</code></pre>');
+          state.code = [];
+          state.inCode = false;
+        } else {
+          state.inCode = true;
+        }
+        continue;
+      }
+
+      if (state.inCode) {
+        state.code.push(rawLine);
+        continue;
+      }
+
+      if (!line.trim()) {
+        flushParagraph();
+        flushList(state, out);
+        continue;
+      }
+
+      const heading = line.match(/^(#{1,6})\s+(.+)$/);
+      if (heading) {
+        flushParagraph();
+        flushList(state, out);
+        const level = heading[1].length;
+        out.push('<h' + level + '>' + inlineMarkdown(heading[2]) + '</h' + level + '>');
+        continue;
+      }
+
+      const listItem = line.match(/^\s*[-*+]\s+(.+)$/);
+      if (listItem) {
+        flushParagraph();
+        state.listItems.push(listItem[1]);
+        continue;
+      }
+
+      const quote = line.match(/^>\s?(.+)$/);
+      if (quote) {
+        flushParagraph();
+        flushList(state, out);
+        out.push('<blockquote><p>' + inlineMarkdown(quote[1]) + '</p></blockquote>');
+        continue;
+      }
+
+      flushList(state, out);
+      state.paragraph.push(line.trim());
+    }
+
+    if (state.inCode) {
+      out.push('<pre><code>' + escapeHtml(state.code.join('\n')) + '</code></pre>');
+    }
+    flushParagraph();
+    flushList(state, out);
+    return out.join('\n');
+  }
+
+  window.marked = { parse: parseBasicMarkdown };
+})();
+
+/**
+ * ==========================================================================
+ * AetherTTS - Gemini API Client Module
+ * ==========================================================================
+ */
+
+/**
+ * Call the Google Gemini API to perform Text-To-Speech on a text chunk.
+ * 
+ * @param {string} text The text to convert to speech.
+ * @param {object} config Configuration options.
+ * @param {string} config.apiKey Google Gemini API Key.
+ * @param {string} config.model Gemini model identifier (e.g., 'gemini-2.5-flash-preview-tts').
+ * @param {string} config.voice Prebuilt voice name (e.g., 'Kore', 'Aoede', 'Puck').
+ * @param {string} config.styleHint Emotional or stylistic hint for reading style.
+ * @returns {Promise<{mimeType: string, base64Data: string}>} The audio data structure.
+ */
+const DEFAULT_TTS_MODEL = 'gemini-3.1-flash-tts-preview';
+const STRUCTURE_TRANSFORM_MODEL = 'gemini-3.5-flash';
+const MAX_TTS_CHARS = 700;
+const MAX_READY_AUDIO_BUFFERS = 12;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function escapeHtmlText(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function transformTextForTtsStructure(rawText, { apiKey, signal = null } = {}) {
+  if (!rawText || !rawText.trim()) return '';
+  if (!apiKey || apiKey.trim() === '') {
+    throw new Error('구조 변환을 위해 Gemini API Key를 먼저 저장해주세요.');
+  }
+
+  const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' + STRUCTURE_TRANSFORM_MODEL + ':generateContent';
+  const systemText = [
+    'You transform source documents into Korean-friendly TTS input.',
+    'Return only the transformed text. Do not add commentary, code fences, summaries, or metadata.',
+    'Preserve every piece of source information without omission.'
+  ].join(' ');
+
+  const transformRules = [
+    '다음 원문을 VOXFLOW TTS용 평문 구조로 변환하세요.',
+    '',
+    '구조 변환 규칙',
+    '1. 표(|, ---), HTML 태그, 마크다운 서식(**, _, `)을 모두 제거하고 평문으로 변환한다. 단, 규칙 6에 명시된 섹션 제목(##)은 예외로 유지한다.',
+    '2. 한 문장은 하나의 완결된 의미 단위로 구성한다. 문장 간 빈 줄 하나로 단락을 구분한다.',
+    '3. 한 문장은 60자 이내로 제한한다. 초과 시 의미 단위로 분리한다.',
+    '4. 글머리 기호(-, •, *)로 된 목록은 "다음과 같습니다. 항목1, 항목2, 항목3입니다." 패턴으로 변환한다.',
+    '5. 번호 목록(1. 2. 3.)은 첫째, 둘째, 셋째 등 서수 표현으로 변환한다.',
+    '6. 섹션 제목은 ## 제목 형태로 유지한다(규칙 1의 예외). TTS 청크 구분 기준으로 활용된다.',
+    '7. 원본의 모든 정보를 누락 없이 보존한다.',
+    '',
+    '숫자·기호 변환 규칙',
+    '8. 숫자는 문맥에 따라 한국어 수사로 변환한다. 단, 연도·코드·모델번호는 숫자 원문을 유지한다.',
+    '9. 수식 기호는 한국어로 치환한다. + → 더하기, - → 빼기, × → 곱하기, ÷ → 나누기, = → 같습니다.',
+    '10. 비교 기호는 서술어로 치환한다. > → 초과, < → 미만, ≥ → 이상, ≤ → 이하.',
+    '11. %는 퍼센트로, °C는 도씨로, /는 문맥에 따라 또는·대·당으로 풀어 쓴다.',
+    '12. 통화 기호는 통화명으로 변환한다. $ → 달러, € → 유로, ₩ → 원.',
+    '',
+    '영문·약어 처리 규칙',
+    '13. 영문 약어(IT, AI, API 등)는 원문을 유지한다.',
+    '14. 영문 전체 문장이 본문에 포함된 경우, 해당 언어 그대로 유지하거나 한국어 번역을 병기한다.',
+    '15. 고유명사(브랜드, 제품명, 인명)는 원문을 유지한다.',
+    '',
+    'Gemini TTS 인라인 마커 삽입 규칙',
+    '16. 섹션 전환 시 첫 문장 앞에 [pause]를 삽입한다.',
+    '17. 핵심어·강조 단어 앞에 [emphasis]를 삽입한다.',
+    '18. 경고·주의·예외 사항 문장 앞에 [cautious]를 삽입한다.',
+    '19. 질문 형식 문장 뒤에는 [pause]를 삽입한다.',
+    '',
+    '추가 규칙',
+    '20. 문장 연결성 확보: 60자 제한으로 문장을 분리할 때는 연결어미(~하고,) 대신 완결된 어미(~합니다.)로 나누어 작성한다.',
+    '21. 범위 기호 처리: 물결표(~)는 문맥에 따라 "에서", "부터", "까지" 등의 명확한 한글 조사로 풀어 쓴다.',
+    '22. 마커 남발 방지: [emphasis]와 [cautious]는 텍스트 전체의 핵심 주제에만 보수적으로 적용하며, 한 단락에 2회를 초과하지 않는다.'
+  ].join('\n');
+  const userText = transformRules + '\n\n원문:\n' + rawText;
+
+  const payload = {
+    model: STRUCTURE_TRANSFORM_MODEL,
+    contents: [{ parts: [{ text: userText }] }],
+    systemInstruction: { parts: [{ text: systemText }] },
+    generationConfig: {
+      temperature: 0.2,
+      responseMimeType: 'text/plain'
+    }
+  };
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey
+    },
+    body: JSON.stringify(payload),
+    signal
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error?.message || 'Gemini 3.5 구조 변환 실패: HTTP ' + response.status);
+  }
+
+  const result = await response.json();
+  const transformed = result.candidates?.[0]?.content?.parts
+    ?.map(part => part.text || '')
+    .join('')
+    .trim();
+
+  if (!transformed) {
+    throw new Error('Gemini 3.5 구조 변환 결과가 비어 있습니다.');
+  }
+
+  return transformed;
+}
+async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice = 'Kore', styleHint = '', signal = null }) {
+  if (!apiKey || apiKey.trim() === '') {
+    throw new Error('Gemini API Key가 누락되었습니다. 상단 설정 바에서 API Key를 입력해주세요.');
+  }
+
+  // Ensure clean model format. Gemini TTS requires a native TTS model variant.
+  const cleanModel = model.replace(/^models\//, '') || DEFAULT_TTS_MODEL;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent`;
+
+  const systemText = `You are a professional Text-To-Speech narrator. Read the provided text naturally, interpreting inline markers as follows: [pause] = insert a brief pause; [emphasis] = stress the immediately following word or phrase; [cautious] = read the following sentence in a careful, cautionary tone. Remove these markers from the spoken output — do not read them aloud. Do NOT add any preamble, commentary, or filler phrases such as "Sure", "Here is the audio", or "Reading now". Start reading immediately.${styleHint ? ` Speech style: ${styleHint}` : ''}`;
+
+  const payload = {
+    model: cleanModel,
+    contents: [
+      {
+        parts: [{ text }]
+      }
+    ],
+    systemInstruction: {
+      parts: [{ text: systemText }]
+    },
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: voice
+          }
+        }
+      }
+    }
+  };
+
+  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey
+        },
+        body: JSON.stringify(payload),
+        signal
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.error?.message || `HTTP error! status: ${response.status}`;
+        const error = new Error(errorMessage);
+        error.status = response.status;
+        throw error;
+      }
+
+      const result = await response.json();
+
+      if (result.error) {
+        throw new Error(result.error.message || `API Error Code: ${result.error.code}`);
+      }
+
+      const candidate = result.candidates?.[0];
+      if (candidate?.finishReason && candidate.finishReason !== 'STOP') {
+        console.warn(`Gemini generation finished with warning reason: ${candidate.finishReason}`);
+      }
+
+      const part = candidate?.content?.parts?.[0];
+      if (!part) {
+        throw new Error('Gemini API가 콘텐츠를 반환하지 않았습니다. 입력 텍스트 또는 설정을 확인하세요.');
+      }
+
+      if (part.inlineData) {
+        return {
+          mimeType: part.inlineData.mimeType,
+          base64Data: part.inlineData.data
+        };
+      } else if (part.text) {
+        throw new Error(`모델이 음성이 아닌 텍스트 결과를 반환했습니다. 선택한 모델(${model})이 Native Audio Modality(AUDIO 출력)를 지원하는지 확인하세요. 반환된 텍스트: "${part.text}"`);
+      } else {
+        throw new Error('Gemini API 응답 형식이 지원되지 않는 구조입니다.');
+      }
+    } catch (error) {
+      lastError = error;
+      const canRetry = retryableStatuses.has(error.status) || /internal error|temporarily|unavailable/i.test(error.message || '');
+      if (!canRetry || attempt === 2) {
+        break;
+      }
+      await sleep(500 * Math.pow(2, attempt));
+    }
+  }
+
+  console.error('Gemini REST API Call Failure:', lastError);
+  if (/internal error/i.test(lastError?.message || '')) {
+    throw new Error(`Gemini TTS 서버 내부 오류가 반복되었습니다. 잠시 후 다시 시도하거나 입력 청크를 더 짧게 나눠보세요. 사용 모델: ${cleanModel}`);
+  }
+  throw lastError;
+}
+
+/**
+ * ==========================================================================
+ * AetherTTS - Smart Text/Markdown Chunker Module
+ * ==========================================================================
+ */
+
+/**
+ * Split a string into sentences based on punctuation and spacing.
+ * 
+ * @param {string} text Plain text to split.
+ * @returns {string[]} Array of sentences.
+ */
+function splitSentences(text) {
+  if (!text) return [];
+
+  const DELIM = '\x01';
+  const SHIELD = '\x02';
+  // Protect common abbreviations so their trailing period doesn't trigger a split
+  const shielded = text.replace(
+    /\b(Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|St|No)\.\s+/g,
+    `$1.${SHIELD}`
+  );
+  const marked = shielded
+    .replace(/([。！？])\s*/g, `$1${DELIM}`)
+    .replace(/([!?])\s+/g, `$1${DELIM}`)
+    // . splits only when followed by space + uppercase or Korean (avoids 3.14, U.S.A.)
+    .replace(/\.\s+([A-Z가-힣])/g, `.${DELIM}$1`)
+    .replace(/\n+/g, DELIM)
+    .replace(new RegExp(SHIELD, 'g'), ' ');
+
+  return marked.split(DELIM).map(s => s.trim()).filter(Boolean);
+}
+
+function splitLongText(text, maxChars = MAX_TTS_CHARS) {
+  const chunks = [];
+  let current = '';
+
+  function pushCurrent() {
+    const trimmed = current.trim();
+    if (trimmed) chunks.push(trimmed);
+    current = '';
+  }
+
+  function pushOversized(value) {
+    let remaining = value.trim();
+    while (remaining.length > maxChars) {
+      let cut = Math.max(
+        remaining.lastIndexOf(' ', maxChars),
+        remaining.lastIndexOf(',', maxChars),
+        remaining.lastIndexOf('，', maxChars),
+        remaining.lastIndexOf(';', maxChars),
+        remaining.lastIndexOf('；', maxChars)
+      );
+      if (cut < Math.floor(maxChars * 0.45)) {
+        cut = maxChars;
+      }
+      chunks.push(remaining.slice(0, cut).trim());
+      remaining = remaining.slice(cut).trim();
+    }
+    if (remaining) chunks.push(remaining);
+  }
+
+  for (const sentence of splitSentences(text)) {
+    if (sentence.length > maxChars) {
+      pushCurrent();
+      pushOversized(sentence);
+      continue;
+    }
+
+    const next = current ? `${current} ${sentence}` : sentence;
+    if (next.length > maxChars) {
+      pushCurrent();
+      current = sentence;
+    } else {
+      current = next;
+    }
+  }
+
+  pushCurrent();
+  return chunks.length ? chunks : [text.trim()].filter(Boolean);
+}
+
+/**
+ * Parse plain text input into readable segments and return styled HTML.
+ * 
+ * @param {string} plainText The raw plain text input.
+ * @returns {{html: string, segments: Array}} The rendered HTML and the segment metadata array.
+ */
+function parsePlainInput(plainText) {
+  if (!plainText) return { html: '', segments: [] };
+  
+  const segments = [];
+  let segmentId = 0;
+  
+  // Split by double newlines into paragraphs
+  const paragraphs = plainText.split(/\n\s*\n/);
+  let htmlResult = '';
+  
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) continue;
+    
+    const chunks = splitLongText(trimmed);
+    if (chunks.length > 1) {
+      let paraHtml = '';
+      
+      for (const chunk of chunks) {
+        const chunkTrimmed = chunk.trim();
+        if (!chunkTrimmed) continue;
+        
+        const id = segmentId++;
+        segments.push({
+          id,
+          text: chunkTrimmed,
+          type: 'sentence',
+          audioBuffer: null,
+          state: 'idle'
+        });
+        
+        paraHtml += `<span id="segment-${id}" class="preview-block sentence-span" data-segment-id="${id}">${escapeHtmlText(chunkTrimmed)} </span>`;
+      }
+      htmlResult += `<p class="plain-para">${paraHtml}</p>`;
+    } else {
+      const id = segmentId++;
+      segments.push({
+        id,
+        text: trimmed,
+        type: 'p',
+        audioBuffer: null,
+        state: 'idle'
+      });
+      
+      htmlResult += `<p id="segment-${id}" class="preview-block plain-para" data-segment-id="${id}">${escapeHtmlText(trimmed)}</p>`;
+    }
+  }
+  
+  return { html: htmlResult, segments };
+}
+
+function sanitizeHtmlFragment(html) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+
+  template.content.querySelectorAll('script, style, iframe, object, embed').forEach(node => node.remove());
+  template.content.querySelectorAll('*').forEach((node) => {
+    [...node.attributes].forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = attr.value.trim().toLowerCase();
+      if (name.startsWith('on') || (['href', 'src', 'xlink:href'].includes(name) && value.startsWith('javascript:'))) {
+        node.removeAttribute(attr.name);
+      }
+    });
+  });
+
+  return template.innerHTML;
+}
+
+/**
+ * Parse markdown text into segments and return interactive HTML with unique IDs.
+ * Utilizes standard marked.js for core parsing and runs DOM post-processing.
+ * 
+ * @param {string} markdownText The raw markdown string.
+ * @returns {{html: string, segments: Array}} Rendered HTML string and segment metadata.
+ */
+function parseMarkdown(markdownText) {
+  if (!markdownText) return { html: '', segments: [] };
+  
+  // 1. Convert markdown to HTML using marked.js loaded in the window
+  if (!window.marked) {
+    console.error('marked.js is not loaded in the window context. Falling back to plain parsing.');
+    return parsePlainInput(markdownText);
+  }
+  
+  const rawHtml = window.marked.parse(markdownText);
+  
+  // 2. Load into a virtual DOM element for robust post-processing
+  const temp = document.createElement('div');
+  temp.innerHTML = sanitizeHtmlFragment(rawHtml);
+  
+  const segments = [];
+  let segmentId = 0;
+  
+  // Select speakable semantic blocks
+  const selector = 'p, h1, h2, h3, h4, h5, h6, li, blockquote';
+  const elements = temp.querySelectorAll(selector);
+  
+  elements.forEach((el) => {
+    // Skip blockquotes themselves (their nested elements, like 'p' or 'li', will be processed individually)
+    if (el.tagName === 'BLOCKQUOTE') {
+      return;
+    }
+    
+    // Avoid reading content inside code snippets or code blocks
+    if (el.closest('pre') || el.closest('code')) {
+      return;
+    }
+    
+    const textContent = el.textContent.trim();
+    if (!textContent) return;
+    
+    // If it is long, decompose into smaller TTS-safe chunks.
+    const chunks = splitLongText(textContent);
+    if (el.tagName === 'P' && chunks.length > 1) {
+      el.innerHTML = ''; // Clear original paragraph contents
+      
+      chunks.forEach((chunk) => {
+        const chunkTrimmed = chunk.trim();
+        if (!chunkTrimmed) return;
+        
+        const id = segmentId++;
+        segments.push({
+          id,
+          text: chunkTrimmed,
+          type: 'sentence',
+          audioBuffer: null,
+          state: 'idle'
+        });
+        
+        const span = document.createElement('span');
+        span.id = `segment-${id}`;
+        span.className = 'preview-block sentence-span';
+        span.setAttribute('data-segment-id', id);
+        span.textContent = chunkTrimmed + ' ';
+        el.appendChild(span);
+      });
+    } else {
+      // Standard block element (headings, list items, short paragraphs)
+      const id = segmentId++;
+      segments.push({
+        id,
+        text: textContent,
+        type: el.tagName.toLowerCase(),
+        audioBuffer: null,
+        state: 'idle'
+      });
+      
+      el.id = `segment-${id}`;
+      el.classList.add('preview-block');
+      el.setAttribute('data-segment-id', id);
+    }
+  });
+  
+  return { html: temp.innerHTML, segments };
+}
+
+/**
+ * ==========================================================================
+ * AetherTTS - Web Audio API & Playback Queue Manager Module
+ * ==========================================================================
+ */
+
+/**
+ * Convert a base64 string into an ArrayBuffer.
+ * 
+ * @param {string} base64 Base64 string.
+ * @returns {ArrayBuffer} ArrayBuffer representing binary bytes.
+ */
+function base64ToArrayBuffer(base64) {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+/**
+ * Convert raw 16-bit signed PCM (Little-Endian) into a standard Float32 AudioBuffer.
+ * 
+ * @param {AudioContext} audioCtx The AudioContext context.
+ * @param {ArrayBuffer} arrayBuffer The raw PCM bytes.
+ * @param {number} sampleRate The sample rate of PCM (Gemini outputs 24000Hz).
+ * @returns {AudioBuffer} Renderable AudioBuffer.
+ */
+function pcmToAudioBuffer(audioCtx, arrayBuffer, sampleRate = 24000) {
+  const int16Data = new Int16Array(arrayBuffer);
+  const float32Data = new Float32Array(int16Data.length);
+  
+  // Normalize Int16 range [-32768, 32767] to Float32 range [-1.0, 1.0]
+  for (let i = 0; i < int16Data.length; i++) {
+    float32Data[i] = int16Data[i] / 32768.0;
+  }
+  
+  const audioBuffer = audioCtx.createBuffer(1, float32Data.length, sampleRate);
+  audioBuffer.copyToChannel(float32Data, 0);
+  return audioBuffer;
+}
+
+/**
+ * QueueManager manages the sequential playback, pre-fetching, 
+ * and Web Audio API node routing of the generated speech segments.
+ */
+class QueueManager {
+  constructor() {
+    this.audioCtx = null;
+    this.analyserNode = null;
+    this.gainNode = null;
+    
+    this.segments = [];
+    this.currentIndex = 0;
+    this.isPlaying = false;
+    this.status = 'idle'; // 'idle' | 'generating' | 'buffering' | 'playing' | 'paused'
+    
+    this.volume = 1.0;
+    this.playbackRate = 1.0;
+    
+    this.currentSourceNode = null;
+    this.startTime = 0;
+    this.pausedAt = 0;
+    this.generationAbortController = null;
+
+    // API configuration for prefetching
+    this.apiConfig = {
+      apiKey: '',
+      model: DEFAULT_TTS_MODEL,
+      voice: 'Kore',
+      styleHint: ''
+    };
+    
+    this.eventListeners = {
+      statusChange: [],
+      segmentStart: [],
+      segmentEnd: [],
+      progress: [],
+      stateUpdate: []
+    };
+    
+    this.progressInterval = null;
+  }
+
+  /**
+   * Lazy-initializes the browser Web Audio API context under user gesture.
+   */
+  initAudio() {
+    if (!this.audioCtx) {
+      this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // Node routing: Source -> GainNode (Volume) -> AnalyserNode (Visualizer) -> Destination (Speakers)
+      this.analyserNode = this.audioCtx.createAnalyser();
+      this.analyserNode.fftSize = 256;
+      
+      this.gainNode = this.audioCtx.createGain();
+      this.gainNode.gain.setValueAtTime(this.volume, this.audioCtx.currentTime);
+      
+      this.gainNode.connect(this.analyserNode);
+      this.analyserNode.connect(this.audioCtx.destination);
+    }
+    
+    if (this.audioCtx.state === 'suspended') {
+      this.audioCtx.resume();
+    }
+  }
+
+  /**
+   * Bind event listeners.
+   */
+  addEventListener(event, callback) {
+    if (this.eventListeners[event]) {
+      this.eventListeners[event].push(callback);
+    }
+  }
+
+  /**
+   * Emit events.
+   */
+  emit(event, ...args) {
+    if (this.eventListeners[event]) {
+      this.eventListeners[event].forEach(cb => cb(...args));
+    }
+  }
+
+  /**
+   * Set speech segments.
+   */
+  setSegments(segments) {
+    this.stop();
+    this.segments = segments.map(seg => ({
+      ...seg,
+      audioBuffer: null,
+      state: 'idle', // 'idle' | 'generating' | 'ready' | 'error'
+      errorMsg: null
+    }));
+    this.currentIndex = 0;
+    this.emit('stateUpdate', this.segments);
+  }
+
+  /**
+   * Update API Configuration.
+   */
+  setConfig(config) {
+    this.apiConfig = { ...this.apiConfig, ...config };
+  }
+
+  releaseDistantAudioBuffers(centerIndex = this.currentIndex) {
+    const readySegments = this.segments
+      .filter(seg => seg.audioBuffer)
+      .sort((a, b) => Math.abs(a.id - centerIndex) - Math.abs(b.id - centerIndex));
+
+    readySegments.slice(MAX_READY_AUDIO_BUFFERS).forEach((seg) => {
+      seg.audioBuffer = null;
+      if (seg.state === 'ready') {
+        seg.state = 'idle';
+      }
+    });
+  }
+
+  /**
+   * Set playback volume (0.0 to 1.0).
+   */
+  setVolume(value) {
+    this.volume = Math.max(0, Math.min(1, value));
+    if (this.gainNode) {
+      this.gainNode.gain.setValueAtTime(this.volume, this.audioCtx.currentTime);
+    }
+  }
+
+  /**
+   * Set playback speed (0.5 to 2.0).
+   */
+  setPlaybackRate(value) {
+    this.playbackRate = Math.max(0.5, Math.min(2.0, value));
+    if (this.currentSourceNode) {
+      this.currentSourceNode.playbackRate.setValueAtTime(this.playbackRate, this.audioCtx.currentTime);
+    }
+  }
+
+  /**
+   * Start or resume playback of the queue.
+   */
+  async play() {
+    this.initAudio();
+    
+    if (this.segments.length === 0) return;
+    
+    this.isPlaying = true;
+    
+    if (this.status === 'paused') {
+      // Resume logic
+      // Note: In Web Audio API, a stopped source cannot be resuscitated. 
+      // We recreate the source node and start from where it was paused.
+      this.playSegment(this.currentIndex, this.pausedAt);
+      return;
+    }
+    
+    this.playSegment(this.currentIndex);
+  }
+
+  /**
+   * Pause current playback.
+   */
+  pause() {
+    if (!this.isPlaying) return;
+    
+    this.isPlaying = false;
+    this.setStatus('paused');
+    
+    if (this.currentSourceNode) {
+      this.currentSourceNode.onended = null;
+      this.currentSourceNode.stop();
+      this.currentSourceNode = null;
+      this.pausedAt += (this.audioCtx.currentTime - this.startTime) * this.playbackRate;
+    }
+
+    this.stopProgressTracking();
+  }
+
+  /**
+   * Completely stop playback and reset pointers.
+   */
+  stop() {
+    this.isPlaying = false;
+    this.setStatus('idle');
+
+    if (this.generationAbortController) {
+      this.generationAbortController.abort();
+      this.generationAbortController = null;
+    }
+
+    if (this.currentSourceNode) {
+      this.currentSourceNode.onended = null;
+      this.currentSourceNode.stop();
+      this.currentSourceNode = null;
+    }
+
+    this.pausedAt = 0;
+    this.stopProgressTracking();
+    this.emit('progress', 0, 1);
+  }
+
+  /**
+   * Skip forward.
+   */
+  next() {
+    if (this.currentIndex < this.segments.length - 1) {
+      this.jumpToSegment(this.currentIndex + 1);
+    }
+  }
+
+  /**
+   * Skip backward.
+   */
+  prev() {
+    if (this.currentIndex > 0) {
+      this.jumpToSegment(this.currentIndex - 1);
+    }
+  }
+
+  /**
+   * Jump directly to a specific segment and play.
+   */
+  jumpToSegment(index) {
+    if (index < 0 || index >= this.segments.length) return;
+    
+    this.stop();
+    this.currentIndex = index;
+    this.isPlaying = true;
+    this.playSegment(index);
+  }
+
+  /**
+   * Core segment playback router. Handles generation triggers, 
+   * buffering waits, and Web Audio node scheduling.
+   */
+  async playSegment(index, offset = 0) {
+    if (index < 0 || index >= this.segments.length) {
+      this.stop();
+      return;
+    }
+    
+    this.currentIndex = index;
+    const segment = this.segments[index];
+    this.emit('segmentStart', index);
+    
+    // Case 1: Audio buffer is ready
+    if (segment.audioBuffer) {
+      this.pausedAt = offset;
+      if (!this.generationAbortController) {
+        this.generationAbortController = new AbortController();
+      }
+      this.executePlayback(segment.audioBuffer, offset);
+      this.prefetchNext();
+      return;
+    }
+    
+    // Case 2: Audio is actively generating
+    if (segment.state === 'generating') {
+      this.setStatus('buffering');
+      // Wait for it to become ready
+      const checkInterval = setInterval(() => {
+        if (!this.isPlaying || this.currentIndex !== index) {
+          clearInterval(checkInterval);
+          return;
+        }
+        if (segment.state === 'ready' && segment.audioBuffer) {
+          clearInterval(checkInterval);
+          this.playSegment(index, offset);
+        } else if (segment.state === 'error') {
+          clearInterval(checkInterval);
+          this.setStatus('idle');
+          showNotification(`음성 재생 실패: ${segment.errorMsg}`);
+        }
+      }, 100);
+      return;
+    }
+    
+    // Case 3: Idle / Needs generation
+    this.setStatus('generating');
+    segment.state = 'generating';
+    this.emit('stateUpdate', this.segments);
+
+    if (!this.generationAbortController) {
+      this.generationAbortController = new AbortController();
+    }
+    const { signal } = this.generationAbortController;
+
+    try {
+      const result = await generateSpeech(segment.text, { ...this.apiConfig, signal });
+      const audioBuffer = await this.decodeAudio(result.base64Data, result.mimeType);
+
+      segment.audioBuffer = audioBuffer;
+      segment.state = 'ready';
+      this.releaseDistantAudioBuffers(index);
+      this.emit('stateUpdate', this.segments);
+
+      if (this.isPlaying && this.currentIndex === index) {
+        this.playSegment(index, offset);
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        segment.state = 'idle';
+        this.emit('stateUpdate', this.segments);
+        return;
+      }
+      segment.state = 'error';
+      segment.errorMsg = err.message || 'API Call failed';
+      this.emit('stateUpdate', this.segments);
+
+      if (this.isPlaying && this.currentIndex === index) {
+        this.isPlaying = false;
+        this.setStatus('idle');
+        showNotification(`음성 생성 실패: ${err.message}`);
+      }
+    }
+  }
+
+  /**
+   * Triggers background prefetching of the next two segments in queue.
+   */
+  async prefetchNext() {
+    const prefetchCount = 2; // Prefetch upcoming two segments
+    
+    for (let i = 1; i <= prefetchCount; i++) {
+      const nextIndex = this.currentIndex + i;
+      if (nextIndex >= this.segments.length) break;
+      
+      const segment = this.segments[nextIndex];
+      if (segment.state !== 'idle' || segment.audioBuffer) continue;
+      
+      // Async background generation trigger
+      segment.state = 'generating';
+      this.emit('stateUpdate', this.segments);
+      
+      const signal = this.generationAbortController?.signal ?? null;
+      (async () => {
+        try {
+          const result = await generateSpeech(segment.text, { ...this.apiConfig, signal });
+          segment.audioBuffer = await this.decodeAudio(result.base64Data, result.mimeType);
+          segment.state = 'ready';
+          this.releaseDistantAudioBuffers(nextIndex);
+        } catch (err) {
+          if (err.name === 'AbortError') {
+            segment.state = 'idle';
+          } else {
+            console.error(`Prefetch failed for segment ${nextIndex}:`, err);
+            segment.state = 'error';
+            segment.errorMsg = err.message;
+          }
+        } finally {
+          this.emit('stateUpdate', this.segments);
+        }
+      })();
+    }
+  }
+
+  /**
+   * Set Status.
+   */
+  setStatus(newStatus) {
+    if (this.status !== newStatus) {
+      this.status = newStatus;
+      this.emit('statusChange', newStatus);
+    }
+  }
+
+  /**
+   * Execute physical buffer playback.
+   */
+  executePlayback(audioBuffer, offset = 0) {
+    this.setStatus('playing');
+    
+    // Create source node
+    const source = this.audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.playbackRate.setValueAtTime(this.playbackRate, this.audioCtx.currentTime);
+    
+    // Connect node to routing path
+    source.connect(this.gainNode);
+    this.currentSourceNode = source;
+    
+    this.startTime = this.audioCtx.currentTime - (offset / this.playbackRate);
+    
+    // Set callbacks
+    source.onended = () => {
+      this.stopProgressTracking();
+      this.currentSourceNode = null;
+      
+      if (this.isPlaying) {
+        // Auto transition to next segment
+        if (this.currentIndex < this.segments.length - 1) {
+          this.currentIndex++;
+          this.pausedAt = 0;
+          this.playSegment(this.currentIndex);
+        } else {
+          // Finished entire document
+          this.stop();
+          this.emit('segmentEnd', this.currentIndex);
+        }
+      }
+    };
+    
+    source.start(0, offset);
+    this.startProgressTracking(audioBuffer.duration);
+  }
+
+  /**
+   * Decode returned audio payload. Automatically handles fallback 
+   * decodeAudioData vs raw PCM 16-bit decoding.
+   */
+  async decodeAudio(base64Data, mimeType) {
+    this.initAudio();
+    const buffer = base64ToArrayBuffer(base64Data);
+    
+    if (mimeType.toLowerCase().includes('linear16') || mimeType.toLowerCase().includes('pcm')) {
+      // Decode raw 16-bit PCM 24kHz
+      return pcmToAudioBuffer(this.audioCtx, buffer, 24000);
+    } else {
+      // Decode standard formats (wav, mp3, etc.) supported natively
+      try {
+        return await this.audioCtx.decodeAudioData(buffer.slice(0));
+      } catch (err) {
+        console.warn('Browser decodeAudioData failed, trying PCM fallback:', err);
+        // Sometimes raw PCM is returned with incorrect headers
+        return pcmToAudioBuffer(this.audioCtx, buffer, 24000);
+      }
+    }
+  }
+
+  /**
+   * Track current segment playback progress.
+   */
+  startProgressTracking(duration) {
+    this.stopProgressTracking();
+    
+    this.progressInterval = setInterval(() => {
+      if (!this.isPlaying || !this.currentSourceNode) {
+        this.stopProgressTracking();
+        return;
+      }
+      
+      const elapsed = (this.audioCtx.currentTime - this.startTime) * this.playbackRate;
+      this.emit('progress', elapsed, duration);
+    }, 100);
+  }
+
+  /**
+   * Stop tracking.
+   */
+  stopProgressTracking() {
+    if (this.progressInterval) {
+      clearInterval(this.progressInterval);
+      this.progressInterval = null;
+    }
+  }
+}
+
 /**
  * ==========================================================================
  * AetherTTS - Main Application Controller Module
  * ==========================================================================
  */
-
-import { parseMarkdown, parsePlainInput } from './chunker.js';
-import { QueueManager } from './player.js';
 
 // Global application state
 const state = {
@@ -13,9 +1131,12 @@ const state = {
   currentFile: null,
   segments: [],
   apiKey: '',
-  model: 'gemini-2.0-flash',
+  model: DEFAULT_TTS_MODEL,
   voice: 'Kore',
-  styleHint: ''
+  styleHint: '',
+  transformAbortController: null,
+  parseRequestId: 0,
+  isTransforming: false
 };
 
 // Instantiate Playback Queue Manager
@@ -25,6 +1146,8 @@ const queue = new QueueManager();
 const elements = {
   apiKeyInput: document.getElementById('api-key'),
   apiKeyWrapper: document.getElementById('api-key-wrapper'),
+  btnSaveApiKey: document.getElementById('btn-save-api-key'),
+  btnEditApiKey: document.getElementById('btn-edit-api-key'),
   
   tabText: document.getElementById('tab-text'),
   tabMd: document.getElementById('tab-md'),
@@ -43,7 +1166,6 @@ const elements = {
   btnRemoveFile: document.getElementById('btn-remove-file'),
   
   selectModel: document.getElementById('select-model'),
-  inputCustomModel: document.getElementById('input-custom-model'),
   selectVoice: document.getElementById('select-voice'),
   inputStyleHint: document.getElementById('input-style-hint'),
   
@@ -71,6 +1193,7 @@ const elements = {
 
 let currentViewMode = 'preview'; // 'preview' | 'playlist'
 let visualizerAnimationId = null;
+let visualizerPhase = 0;
 
 /**
  * Initialize AetherTTS Web Application.
@@ -103,25 +1226,49 @@ function setupApiKey() {
   if (savedKey) {
     state.apiKey = savedKey;
     elements.apiKeyInput.value = savedKey;
-    setApiKeySecurityState(true);
+    queue.setConfig({ apiKey: savedKey });
+    setApiKeyEditMode(false);
+  } else {
+    setApiKeyEditMode(true);
   }
   
-  // Handle key changes
-  elements.apiKeyInput.addEventListener('input', (e) => {
-    const key = e.target.value.trim();
-    state.apiKey = key;
-    
-    if (key) {
-      localStorage.setItem('aether_tts_api_key', key);
-      setApiKeySecurityState(true);
-    } else {
-      localStorage.removeItem('aether_tts_api_key');
+  elements.btnSaveApiKey.addEventListener('click', saveApiKey);
+  elements.btnEditApiKey.addEventListener('click', () => {
+    setApiKeyEditMode(true);
+    elements.apiKeyInput.focus();
+    elements.apiKeyInput.select();
+  });
+
+  elements.apiKeyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveApiKey();
+    }
+  });
+
+  elements.apiKeyInput.addEventListener('input', () => {
+    if (!elements.apiKeyInput.value.trim()) {
       setApiKeySecurityState(false);
     }
-    
-    // Sync to queue manager
-    queue.setConfig({ apiKey: key });
   });
+}
+
+function saveApiKey() {
+  const key = elements.apiKeyInput.value.trim();
+
+  if (key) {
+    localStorage.setItem('aether_tts_api_key', key);
+    state.apiKey = key;
+    queue.setConfig({ apiKey: key });
+    setApiKeySecurityState(true);
+    setApiKeyEditMode(false);
+  } else {
+    localStorage.removeItem('aether_tts_api_key');
+    state.apiKey = '';
+    queue.setConfig({ apiKey: '' });
+    setApiKeySecurityState(false);
+    setApiKeyEditMode(true);
+  }
 }
 
 function setApiKeySecurityState(isSecure) {
@@ -130,6 +1277,13 @@ function setApiKeySecurityState(isSecure) {
   } else {
     elements.apiKeyWrapper.classList.remove('secure');
   }
+}
+
+function setApiKeyEditMode(isEditing) {
+  elements.apiKeyInput.readOnly = !isEditing;
+  elements.btnSaveApiKey.classList.toggle('hidden', !isEditing);
+  elements.btnEditApiKey.classList.toggle('hidden', isEditing);
+  setApiKeySecurityState(Boolean(state.apiKey) && !isEditing);
 }
 
 /* ==========================================================================
@@ -221,7 +1375,7 @@ function handleFileImport(file) {
   // Verify extension
   const extension = file.name.split('.').pop().toLowerCase();
   if (extension !== 'md' && extension !== 'txt') {
-    alert('오직 마크다운(.md) 또는 텍스트(.txt) 파일만 업로드할 수 있습니다.');
+    showNotification('오직 마크다운(.md) 또는 텍스트(.txt) 파일만 업로드할 수 있습니다.');
     return;
   }
 
@@ -234,10 +1388,18 @@ function handleFileImport(file) {
   elements.uploadZone.classList.add('hidden');
   
   // Parse contents
+  const fileToken = file;
   const reader = new FileReader();
   reader.onload = (e) => {
+    if (state.currentFile !== fileToken) return;
     state.currentFile.content = e.target.result;
     triggerParsing();
+  };
+  reader.onerror = () => {
+    state.currentFile = null;
+    elements.fileInfoCard.classList.add('hidden');
+    elements.uploadZone.classList.remove('hidden');
+    showNotification('파일을 읽는 중 오류가 발생했습니다.');
   };
   reader.readAsText(file);
 }
@@ -261,8 +1423,8 @@ function setupTextareaCounter() {
     elements.charCounter.textContent = `${count} 자`;
   });
 
-  elements.btnGenerate.addEventListener('click', () => {
-    triggerParsing();
+  elements.btnGenerate.addEventListener('click', async () => {
+    await triggerParsing();
   });
 }
 
@@ -278,13 +1440,7 @@ function setupSettings() {
 
   // Key sync helper
   const syncConfig = () => {
-    let activeModel = elements.selectModel.value;
-    if (activeModel === 'custom') {
-      elements.inputCustomModel.classList.remove('hidden');
-      activeModel = elements.inputCustomModel.value.trim() || 'gemini-2.0-flash';
-    } else {
-      elements.inputCustomModel.classList.add('hidden');
-    }
+    const activeModel = elements.selectModel.value || DEFAULT_TTS_MODEL;
     
     state.model = activeModel;
     state.voice = elements.selectVoice.value;
@@ -299,7 +1455,6 @@ function setupSettings() {
   };
 
   elements.selectModel.addEventListener('change', syncConfig);
-  elements.inputCustomModel.addEventListener('input', syncConfig);
   elements.selectVoice.addEventListener('change', syncConfig);
   elements.inputStyleHint.addEventListener('input', syncConfig);
 
@@ -311,23 +1466,85 @@ function setupSettings() {
    Interactive Parser and Playlist Generator
    ========================================================================== */
 
-function triggerParsing() {
-  let parseResult = { html: '', segments: [] };
-  
+async function triggerParsing() {
+  let sourceText = '';
+  const parseRequestId = ++state.parseRequestId;
+
+  if (state.transformAbortController) {
+    state.transformAbortController.abort();
+  }
+  state.transformAbortController = new AbortController();
+
   if (state.isMarkdownMode) {
     if (state.currentFile && state.currentFile.content) {
-      parseResult = parseMarkdown(state.currentFile.content);
+      sourceText = state.currentFile.content;
     }
   } else {
-    const textVal = elements.textareaInput.value.trim();
-    if (textVal) {
-      parseResult = parsePlainInput(textVal);
+    sourceText = elements.textareaInput.value.trim();
+  }
+
+  if (!sourceText) {
+    state.segments = [];
+    queue.setSegments([]);
+    renderPreview('', []);
+    return false;
+  }
+
+  if (!state.apiKey) {
+    showNotification('Gemini 3.5 구조 변환을 위해 API Key를 먼저 저장해주세요.', 'warning');
+    state.segments = [];
+    queue.setSegments([]);
+    renderPreview('', []);
+    return false;
+  }
+
+  state.isTransforming = true;
+  setTransformingUi(true);
+
+  try {
+    const transformedText = await transformTextForTtsStructure(sourceText, {
+      apiKey: state.apiKey,
+      signal: state.transformAbortController.signal
+    });
+
+    if (parseRequestId !== state.parseRequestId) return false;
+
+    const parseResult = parseMarkdown(transformedText);
+    state.segments = parseResult.segments;
+    queue.setSegments(state.segments);
+    renderPreview(parseResult.html, parseResult.segments);
+    showNotification('Gemini 3.5 구조 변환이 완료되었습니다.', 'success');
+    return true;
+  } catch (err) {
+    if (err.name === 'AbortError') return false;
+    if (parseRequestId !== state.parseRequestId) return false;
+    console.error('Structure transform failed:', err);
+    state.segments = [];
+    queue.setSegments([]);
+    renderPreview('', []);
+    showNotification('구조 변환 실패: ' + err.message);
+    return false;
+  } finally {
+    if (parseRequestId === state.parseRequestId) {
+      state.isTransforming = false;
+      state.transformAbortController = null;
+      setTransformingUi(false);
     }
   }
-  
-  state.segments = parseResult.segments;
-  queue.setSegments(state.segments);
-  renderPreview(parseResult.html, parseResult.segments);
+}
+
+
+function setTransformingUi(isTransforming) {
+  elements.btnGenerate.disabled = isTransforming;
+  elements.btnPlayPause.disabled = isTransforming;
+  if (isTransforming) {
+    elements.statusText.textContent = 'Gemini 3.5 구조 변환 중...';
+    elements.btnGenerate.textContent = '구조 변환 중...';
+  } else {
+    elements.statusText.textContent = queue.status === 'idle' ? '대기 중' : elements.statusText.textContent;
+    elements.btnGenerate.innerHTML = '<i data-lucide="sparkles"></i> 텍스트 분석 및 플레이리스트 생성';
+    if (window.lucide) window.lucide.createIcons();
+  }
 }
 
 function renderPreview(htmlContent, segments) {
@@ -354,16 +1571,27 @@ function renderPreview(htmlContent, segments) {
     item.id = `playlist-item-${seg.id}`;
     item.setAttribute('data-segment-id', seg.id);
     
-    // Set structure
-    item.innerHTML = `
-      <div class="segment-status-icon">
-        <span class="index-num">${index + 1}</span>
-      </div>
-      <div class="segment-text">${seg.text}</div>
-      <div class="segment-actions">
-        <button class="btn btn-icon" style="width:28px; height:28px;"><i data-lucide="play" style="width:12px; height:12px;"></i></button>
-      </div>
-    `;
+    const statusIcon = document.createElement("div");
+    statusIcon.className = "segment-status-icon";
+    const indexNum = document.createElement("span");
+    indexNum.className = "index-num";
+    indexNum.textContent = String(index + 1);
+    statusIcon.appendChild(indexNum);
+
+    const segmentText = document.createElement("div");
+    segmentText.className = "segment-text";
+    segmentText.textContent = seg.text;
+
+    const segmentActions = document.createElement("div");
+    segmentActions.className = "segment-actions";
+    const playButton = document.createElement("button");
+    playButton.className = "btn btn-icon";
+    playButton.style.width = "28px";
+    playButton.style.height = "28px";
+    playButton.innerHTML = '<i data-lucide="play" style="width:12px; height:12px;"></i>';
+    segmentActions.appendChild(playButton);
+
+    item.append(statusIcon, segmentText, segmentActions);
     
     // Add Click listener to jump and play
     item.addEventListener('click', () => {
@@ -415,13 +1643,19 @@ function renderPreview(htmlContent, segments) {
    ========================================================================== */
 
 function setupPlayerControls() {
-  elements.btnPlayPause.addEventListener('click', () => {
+  elements.btnPlayPause.addEventListener('click', async () => {
+    if (state.isTransforming) {
+      showNotification('Gemini 3.5 구조 변환이 끝난 뒤 재생할 수 있습니다.', 'warning');
+      return;
+    }
+
     if (state.segments.length === 0) {
-      triggerParsing();
+      const parsed = await triggerParsing();
+      if (!parsed) return;
     }
     
     if (state.segments.length === 0) {
-      alert('음성으로 생성할 텍스트가 존재하지 않습니다.');
+      showNotification('음성으로 생성할 텍스트가 존재하지 않습니다.', 'warning');
       return;
     }
     
@@ -574,26 +1808,66 @@ function formatTime(secs) {
   return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
 
+function showNotification(message, type = 'error') {
+  let container = document.getElementById('notification-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'notification-container';
+    container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+    document.body.appendChild(container);
+  }
+
+  const styles = {
+    error:   { bg: '#fef2f2', border: 'rgba(239,68,68,0.3)',   color: '#dc2626' },
+    warning: { bg: '#fffbeb', border: 'rgba(245,158,11,0.3)',  color: '#d97706' },
+    success: { bg: '#f0fdf4', border: 'rgba(34,197,94,0.3)',   color: '#16a34a' },
+  };
+  const s = styles[type] ?? styles.error;
+  const toast = document.createElement('div');
+  toast.style.cssText = `background:${s.bg};border:1px solid ${s.border};color:${s.color};padding:12px 16px;border-radius:8px;font-size:13px;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,0.12);pointer-events:auto;animation:fade-in 0.3s ease-out;`;
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.transition = 'opacity 0.3s';
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 300);
+  }, 4000);
+}
+
+function stopVisualizer() {
+  if (visualizerAnimationId) {
+    cancelAnimationFrame(visualizerAnimationId);
+    visualizerAnimationId = null;
+  }
+}
+
+function resizeVisualizerCanvas() {
+  const canvas = elements.visualizer;
+  canvas.width = canvas.parentElement.clientWidth;
+  canvas.height = canvas.parentElement.clientHeight || 120;
+}
+
 /* ==========================================================================
    Highly Premium Flowing Curves Audio Visualizer
    ========================================================================== */
 
 function startVisualizer() {
+  if (visualizerAnimationId || document.hidden) {
+    return;
+  }
+
   const canvas = elements.visualizer;
   const ctx = canvas.getContext('2d');
-  
-  // Set accurate drawing dims
-  function resizeCanvas() {
-    canvas.width = canvas.parentElement.clientWidth;
-    canvas.height = canvas.parentElement.clientHeight || 120;
-  }
-  
-  window.addEventListener('resize', resizeCanvas);
-  resizeCanvas();
-  
-  let phase = 0;
+
+  resizeVisualizerCanvas();
   
   function draw() {
+    if (document.hidden) {
+      visualizerAnimationId = null;
+      return;
+    }
+
     visualizerAnimationId = requestAnimationFrame(draw);
     
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -619,7 +1893,7 @@ function startVisualizer() {
       frequency = 0.01 + (avg / 255) * 0.02; // Scaled wave count
     }
     
-    phase += 0.04; // Wave speed
+    visualizerPhase += 0.04; // Wave speed
     
     // Draw 3 layered transparent sinewaves for organic look
     const waveCount = 3;
@@ -635,7 +1909,7 @@ function startVisualizer() {
       ctx.strokeStyle = waveColors[w];
       
       const centerY = canvas.height / 2;
-      const wavePhase = phase + (w * Math.PI / 3);
+      const wavePhase = visualizerPhase + (w * Math.PI / 3);
       const waveAmplitude = (canvas.height / 3) * amplitude * (1 - w * 0.25);
       
       for (let x = 0; x < canvas.width; x++) {
@@ -656,3 +1930,14 @@ function startVisualizer() {
   
   draw();
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopVisualizer();
+  } else if (!visualizerAnimationId) {
+    startVisualizer();
+  }
+});
+
+window.addEventListener('pagehide', stopVisualizer);
+window.addEventListener('resize', resizeVisualizerCanvas);

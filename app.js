@@ -1807,10 +1807,28 @@ function setTransformingUi(isTransforming) {
   elements.btnPlayPause.disabled = isTransforming;
   elements.btnNext.disabled = isTransforming;
   elements.btnPrev.disabled = isTransforming;
+
   if (isTransforming) {
-    elements.statusText.textContent = 'Gemini 3.5 구조 변환 중...';
-    elements.btnGenerate.textContent = '구조 변환 중...';
+    elements.statusBadge.className = 'status-badge generating';
+    elements.statusText.textContent = 'Gemini 3.5 변환 중';
+    elements.btnGenerate.innerHTML = '<i data-lucide="loader-circle" style="width:14px;height:14px;animation:spin 1s linear infinite;"></i> 구조 변환 중...';
+    if (window.lucide) window.lucide.createIcons();
+
+    elements.previewBody.classList.remove('hidden');
+    elements.playlistContainer.classList.add('hidden');
+    elements.previewBody.innerHTML = `
+      <div class="transform-skeleton">
+        <div class="skeleton-label"><span class="skeleton-dot"></span>Gemini 3.5가 문서를 TTS 구조로 변환하는 중입니다…</div>
+        <div class="skeleton-line w-90"></div>
+        <div class="skeleton-line w-75"></div>
+        <div class="skeleton-line w-85"></div>
+        <div class="skeleton-line w-60"></div>
+        <div class="skeleton-line w-90"></div>
+        <div class="skeleton-line w-70"></div>
+        <div class="skeleton-line w-80"></div>
+      </div>`;
   } else {
+    elements.statusBadge.className = `status-badge ${queue.status === 'idle' ? 'idle' : queue.status}`;
     elements.statusText.textContent = queue.status === 'idle' ? '대기 중' : elements.statusText.textContent;
     elements.btnGenerate.innerHTML = '<i data-lucide="sparkles"></i> 텍스트 분석 및 플레이리스트 생성';
     if (window.lucide) window.lucide.createIcons();

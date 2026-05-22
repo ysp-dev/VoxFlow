@@ -1027,6 +1027,53 @@ header {
   animation: spin 1s linear infinite;
 }
 
+/* Structure-transform skeleton loader */
+.transform-skeleton {
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.skeleton-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.skeleton-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: pulse-dot 1s infinite alternate;
+}
+
+.skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--border-light) 25%, rgba(255,255,255,0.5) 50%, var(--border-light) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s infinite linear;
+}
+
+.skeleton-line.w-90 { width: 90%; }
+.skeleton-line.w-85 { width: 85%; }
+.skeleton-line.w-80 { width: 80%; }
+.skeleton-line.w-75 { width: 75%; }
+.skeleton-line.w-70 { width: 70%; }
+.skeleton-line.w-60 { width: 60%; }
+
+@keyframes skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* Helper hidden class */
 .hidden {
   display: none !important;

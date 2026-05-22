@@ -475,7 +475,6 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     contents: [{ parts: [{ text: userText }] }],
     systemInstruction: { parts: [{ text: systemText }] },
     generationConfig: {
-      temperature: 0.2,
       responseMimeType: 'text/plain'
     }
   };
@@ -1059,10 +1058,14 @@ class QueueManager {
    * Set playback speed (0.5 to 2.0).
    */
   setPlaybackRate(value) {
-    this.playbackRate = Math.max(0.5, Math.min(2.0, value));
-    if (this.currentSourceNode) {
-      this.currentSourceNode.playbackRate.setValueAtTime(this.playbackRate, this.audioCtx.currentTime);
+    const newRate = Math.max(0.5, Math.min(2.0, value));
+    if (this.currentSourceNode && newRate !== this.playbackRate) {
+      // Recalibrate startTime so elapsed/pausedAt calculations stay correct after rate change
+      const elapsed = (this.audioCtx.currentTime - this.startTime) * this.playbackRate;
+      this.startTime = this.audioCtx.currentTime - (elapsed / newRate);
+      this.currentSourceNode.playbackRate.setValueAtTime(newRate, this.audioCtx.currentTime);
     }
+    this.playbackRate = newRate;
   }
 
   /**
@@ -1430,6 +1433,7 @@ const elements = {
   btnSaveApiKey: document.getElementById('btn-save-api-key'),
   btnEditApiKey: document.getElementById('btn-edit-api-key'),
   btnDeleteApiKey: document.getElementById('btn-delete-api-key'),
+  chkPersistKey: document.getElementById('chk-persist-key'),
   
   tabText: document.getElementById('tab-text'),
   tabMd: document.getElementById('tab-md'),
@@ -1503,12 +1507,13 @@ document.addEventListener('DOMContentLoaded', () => {
    ========================================================================== */
 
 function setupApiKey() {
-  // Load saved API key from localStorage
-  const savedKey = localStorage.getItem('aether_tts_api_key');
+  // Prefer persistent (localStorage) key, fall back to session key
+  const savedKey = localStorage.getItem('aether_tts_api_key') || sessionStorage.getItem('aether_tts_api_key');
   if (savedKey) {
     state.apiKey = savedKey;
     elements.apiKeyInput.value = savedKey;
     queue.setConfig({ apiKey: savedKey });
+    elements.chkPersistKey.checked = Boolean(localStorage.getItem('aether_tts_api_key'));
     setApiKeyEditMode(false);
   } else {
     setApiKeyEditMode(true);
@@ -1524,9 +1529,11 @@ function setupApiKey() {
     cancelTransform();
     queue.stop();
     localStorage.removeItem('aether_tts_api_key');
+    sessionStorage.removeItem('aether_tts_api_key');
     state.apiKey = '';
     queue.setConfig({ apiKey: '' });
     elements.apiKeyInput.value = '';
+    elements.chkPersistKey.checked = false;
     setApiKeyEditMode(true);
     showNotification('API Key가 삭제되었습니다.', 'success');
   });
@@ -1549,13 +1556,21 @@ function saveApiKey() {
   const key = elements.apiKeyInput.value.trim();
 
   if (key) {
-    localStorage.setItem('aether_tts_api_key', key);
+    const persist = elements.chkPersistKey.checked;
+    if (persist) {
+      localStorage.setItem('aether_tts_api_key', key);
+      sessionStorage.removeItem('aether_tts_api_key');
+    } else {
+      sessionStorage.setItem('aether_tts_api_key', key);
+      localStorage.removeItem('aether_tts_api_key');
+    }
     state.apiKey = key;
     queue.setConfig({ apiKey: key });
     setApiKeySecurityState(true);
     setApiKeyEditMode(false);
   } else {
     localStorage.removeItem('aether_tts_api_key');
+    sessionStorage.removeItem('aether_tts_api_key');
     state.apiKey = '';
     queue.setConfig({ apiKey: '' });
     setApiKeySecurityState(false);
@@ -1855,7 +1870,6 @@ function setTransformingUi(isTransforming) {
   elements.btnStop.disabled      = isTransforming;
   elements.btnNext.disabled      = isTransforming;
   elements.btnPrev.disabled      = isTransforming;
-  elements.progressBar.disabled  = isTransforming;
   elements.speedInput.disabled   = isTransforming;
 
   if (isTransforming) {

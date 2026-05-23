@@ -305,11 +305,12 @@ async function exportFullAudio(onProgress) {
     const seg = queue.segments[i];
     onProgress?.(i, total);
 
-    const cleanText = stripTtsMarkers(seg.text);
+    const narrationText = seg.ttsText || getNarrationText(seg.text);
+    const cleanText = getNarrationText(narrationText);
     const cacheKey  = await makeTtsCacheKey(cleanText, state.voice, state.styleHint);
     let arrayBuffer = await getCachedAudio(cacheKey);
     if (!arrayBuffer) {
-      const result = await generateSpeech(seg.text, {
+      const result = await generateSpeech(narrationText, {
         apiKey: state.apiKey,
         voice: state.voice,
         styleHint: state.styleHint
@@ -637,7 +638,7 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '- 문서가 아니라 "낭독 스크립트"처럼 작성합니다.',
     '- Markdown, 표, 코드, URL은 제거합니다.',
     '- 숫자와 기호는 한국어 발화 기준으로 변환합니다.',
-    '- AI, API 같은 약어는 발음 기준으로 변환합니다.',
+    '- AI, API 같은 약어와 영문 용어는 발음 기준 한글로 변환하고, 화면 표시용 원문 영문은 괄호에 병기합니다.',
     '- 문장은 자연스럽게 숨 쉴 수 있는 길이로 유지합니다.',
     '- 기계적인 단문 반복을 피합니다.',
     '- 청취 이해도를 최우선으로 합니다.',
@@ -692,15 +693,18 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     'R12. 단위 변환: km → 킬로미터, GB → 기가바이트, ms → 밀리초, °C → 도씨, kg → 킬로그램.',
     '',
     '=== 영문 처리 규칙 ===',
-    'R13. 약어 발음: AI → 에이아이, API → 에이피아이, GPU → 지피유, LLM → 엘엘엠, OCR → 오씨알.',
+    'R13. 약어/영문 용어 발음 병기: AI → 에이아이(AI), API → 에이피아이(API), GPU → 지피유(GPU), LLM → 엘엘엠(LLM), OCR → 오씨알(OCR), OpenAI → 오픈에이아이(OpenAI).',
+    '  괄호 안 영문은 화면 표시용 원문 보존이며, 낭독 대상이 아니다.',
     '',
-    'R14. 영문 문장: 짧은 문장은 원문 유지 가능. 긴 문장은 한국어 설명형으로 변환 권장.',
+    'R14. 영문 단어/제품명/조직명은 가능한 한 한글 발음 또는 한국어 설명으로 변환하고, 필요한 경우 바로 뒤에 영문 원문을 괄호로 병기한다.',
+    '  긴 영문 문장은 한국어 설명형으로 변환하며, 원문 전체를 길게 괄호 병기하지 않는다.',
     '',
     '=== URL 규칙 ===',
     'R15. URL 제거: URL 원문 대신 내용 설명으로 대체한다. (예: https://openai.com/docs → 오픈AI 공식 문서입니다.)',
     '',
     '=== 괄호 규칙 ===',
-    'R16. 괄호 처리: 보충 설명은 쉼표로 변환한다. (예: GPT-5(최신 모델) → GPT-5, 최신 모델)',
+    'R16. 괄호 처리: 보충 설명은 쉼표로 변환한다. 단, R13/R14의 화면 표시용 영문 원문 괄호는 유지한다.',
+    '  예: GPT-5(최신 모델) → GPT-5, 최신 모델 / 에이피아이(API)는 그대로 유지',
     '',
     '=== 코드 규칙 ===',
     'R17. 코드 제거: source code, JSON, XML, SQL, stack trace는 낭독하지 않고 기능 설명으로 변환한다.',
@@ -767,12 +771,28 @@ function stripTtsMarkers(text) {
     .trim();
 }
 
+function removeDisplayOnlyEnglishParentheticals(text) {
+  return String(text || '')
+    .replace(/\s*[\(（]([^()（）]*)[\)）]/g, (match, inner) => {
+      const body = String(inner || '').trim();
+      if (/[A-Za-z]/.test(body) && !/[가-힣]/.test(body)) return '';
+      return match;
+    })
+    .replace(/\s+([,.;:!?。！？])/g, '$1')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+}
+
+function getNarrationText(text) {
+  return removeDisplayOnlyEnglishParentheticals(stripTtsMarkers(text));
+}
+
 async function generateSpeech(text, { apiKey, voice = 'marin', styleHint = '', signal = null }) {
   if (!apiKey || apiKey.trim() === '') {
     throw new Error('OpenAI API Key가 누락되었습니다. 상단 설정 바에서 API Key를 입력해주세요.');
   }
 
-  const cleanText = stripTtsMarkers(text);
+  const cleanText = getNarrationText(text);
 
   // 캐시 조회 — 히트 시 API 호출 없이 즉시 반환
   const cacheKey = await makeTtsCacheKey(cleanText, voice, styleHint);
@@ -947,6 +967,7 @@ function parsePlainInput(plainText) {
         segments.push({
           id,
           text: chunkTrimmed,
+          ttsText: getNarrationText(chunkTrimmed),
           type: 'sentence',
           audioBuffer: null,
           state: 'idle'
@@ -960,6 +981,7 @@ function parsePlainInput(plainText) {
       segments.push({
         id,
         text: trimmed,
+        ttsText: getNarrationText(trimmed),
         type: 'p',
         audioBuffer: null,
         state: 'idle'
@@ -1046,6 +1068,7 @@ function parseMarkdown(markdownText) {
         segments.push({
           id,
           text: chunkTrimmed,
+          ttsText: getNarrationText(chunkTrimmed),
           type: 'sentence',
           audioBuffer: null,
           state: 'idle'
@@ -1064,6 +1087,7 @@ function parseMarkdown(markdownText) {
       segments.push({
         id,
         text: textContent,
+        ttsText: getNarrationText(textContent),
         type: el.tagName.toLowerCase(),
         audioBuffer: null,
         state: 'idle'
@@ -1197,6 +1221,7 @@ class QueueManager {
     this.queueVersion++;
     this.segments = segments.map(seg => ({
       ...seg,
+      ttsText: seg.ttsText || getNarrationText(seg.text),
       audioBuffer: null,
       state: 'idle', // 'idle' | 'generating' | 'ready' | 'error'
       errorMsg: null
@@ -1406,7 +1431,7 @@ class QueueManager {
     const { signal } = this.generationAbortController;
 
     try {
-      const result = await generateSpeech(segment.text, { ...this.apiConfig, signal });
+      const result = await generateSpeech(segment.ttsText || segment.text, { ...this.apiConfig, signal });
       const audioBuffer = await this.decodeAudio(result.arrayBuffer);
 
       segment.audioBuffer = audioBuffer;
@@ -1461,7 +1486,7 @@ class QueueManager {
       const capturedVersion = this.queueVersion;
       (async () => {
         try {
-          const result = await generateSpeech(segment.text, { ...this.apiConfig, signal });
+          const result = await generateSpeech(segment.ttsText || segment.text, { ...this.apiConfig, signal });
           if (this.queueVersion !== capturedVersion) return;
           segment.audioBuffer = await this.decodeAudio(result.arrayBuffer);
           segment.state = 'ready';

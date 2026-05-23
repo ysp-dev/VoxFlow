@@ -540,6 +540,14 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
 
   return transformed;
 }
+function parseQuotaType(msg = '', retryAfterSec = NaN) {
+  if (/per.?day|daily|quota_exceeded_per_day/i.test(msg)) return 'RPD';
+  if (/per.?minute|rate.?limit|quota_exceeded_per_minute/i.test(msg)) return 'RPM';
+  // Heuristic: long retry → RPD, short retry → RPM
+  if (isFinite(retryAfterSec)) return retryAfterSec > 300 ? 'RPD' : 'RPM';
+  return 'RPM';
+}
+
 async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice = 'Kore', styleHint = '', signal = null }) {
   if (!apiKey || apiKey.trim() === '') {
     throw new Error('Gemini API Key가 누락되었습니다. 상단 설정 바에서 API Key를 입력해주세요.');
@@ -561,7 +569,11 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent`;
 
     if (mi > 0) {
-      showNotification(`TTS ${modelsToTry[mi - 1]} 실패 → ${currentModel} 로 전환합니다.`, 'warning');
+      const qt = lastError?.status === 429
+        ? parseQuotaType(lastError.message, parseFloat(lastError.retryAfterHeader))
+        : null;
+      const reason = qt ? `${qt} 초과` : '실패';
+      showNotification(`TTS ${modelsToTry[mi - 1]} ${reason} → ${currentModel} 로 전환합니다.`, 'warning');
     }
 
     const payload = {
@@ -641,7 +653,8 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
                          : (isFinite(fromMsg) && fromMsg > 0) ? fromMsg
                          : 30;
           const waitSec = Math.ceil(delaySec) + 2;
-          await countdownToast(waitSec, `TTS 한도 초과 (${attempt + 1}/${TTS_ATTEMPTS_PER_MODEL}회)`, signal);
+          const qt = parseQuotaType(error.message, parseFloat(error.retryAfterHeader));
+          await countdownToast(waitSec, `TTS ${qt} 한도 초과 (${attempt + 1}/${TTS_ATTEMPTS_PER_MODEL}회)`, signal);
         } else {
           await sleep(600 * Math.pow(2, attempt), signal);
         }
@@ -651,7 +664,9 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
 
   console.error('Gemini TTS API Call Failure:', lastError);
   if (lastError?.status === 429) {
-    throw new Error('모든 TTS 모델의 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.');
+    const qt = parseQuotaType(lastError.message, parseFloat(lastError.retryAfterHeader));
+    const hint = qt === 'RPD' ? '오늘 한도가 소진됐습니다. 내일 다시 시도해주세요.' : '잠시 후 다시 시도해주세요.';
+    throw new Error(`모든 TTS 모델의 ${qt} 한도를 초과했습니다. ${hint}`);
   }
   if (/internal error/i.test(lastError?.message || '')) {
     throw new Error('Gemini TTS 서버 내부 오류가 반복되었습니다. 잠시 후 다시 시도하거나 입력 청크를 더 짧게 나눠보세요.');

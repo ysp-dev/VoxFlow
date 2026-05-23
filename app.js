@@ -2231,16 +2231,35 @@ function showNotification(message, type = 'error') {
     success: { bg: '#f0fdf4', border: 'rgba(34,197,94,0.3)',   color: '#16a34a' },
   };
   const s = styles[type] ?? styles.error;
+
   const toast = document.createElement('div');
   toast.style.cssText = `background:${s.bg};border:1px solid ${s.border};color:${s.color};padding:12px 16px;border-radius:8px;font-size:13px;max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,0.12);pointer-events:auto;animation:fade-in 0.3s ease-out;`;
-  toast.textContent = message;
-  container.appendChild(toast);
 
-  setTimeout(() => {
+  const dismiss = () => {
     toast.style.transition = 'opacity 0.3s';
     toast.style.opacity = '0';
     setTimeout(() => toast.remove(), 300);
-  }, 4000);
+  };
+
+  if (type === 'error') {
+    toast.style.paddingBottom = '10px';
+    const body = document.createElement('div');
+    body.textContent = message;
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'margin-top:10px;text-align:right;';
+    const btn = document.createElement('button');
+    btn.textContent = '확인';
+    btn.style.cssText = `background:transparent;border:1px solid ${s.border};color:${s.color};padding:3px 12px;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;`;
+    btn.addEventListener('click', dismiss);
+    btnRow.appendChild(btn);
+    toast.appendChild(body);
+    toast.appendChild(btnRow);
+  } else {
+    toast.textContent = message;
+    setTimeout(dismiss, 4000);
+  }
+
+  container.appendChild(toast);
 }
 
 function stopVisualizer() {

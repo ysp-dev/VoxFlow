@@ -1517,6 +1517,7 @@ const elements = {
   fileName: document.getElementById('file-name'),
   fileSize: document.getElementById('file-size'),
   btnRemoveFile: document.getElementById('btn-remove-file'),
+  btnGenerateMd: document.getElementById('btn-generate-md'),
   
   selectVoice: document.getElementById('select-voice'),
   inputStyleHint: document.getElementById('input-style-hint'),
@@ -1741,9 +1742,21 @@ function setupUploadZone() {
     elements.fileInput.value = '';
     elements.fileInfoCard.classList.add('hidden');
     elements.uploadZone.classList.remove('hidden');
+    elements.btnGenerateMd.classList.add('hidden');
     state.segments = [];
     queue.setSegments([]);
     renderPreview('', []);
+  });
+
+  elements.btnGenerateMd.addEventListener('click', async () => {
+    if (state.isTransforming) {
+      cancelTransform();
+      state.segments = [];
+      queue.setSegments([]);
+      renderPreview('', []);
+      return;
+    }
+    await triggerParsing();
   });
 }
 
@@ -1769,7 +1782,8 @@ function handleFileImport(file) {
   reader.onload = (e) => {
     if (state.currentFile !== fileToken) return;
     state.currentFile.content = e.target.result;
-    triggerParsing();
+    elements.btnGenerateMd.classList.remove('hidden');
+    if (window.lucide) window.lucide.createIcons();
   };
   reader.onerror = () => {
     state.currentFile = null;
@@ -1952,10 +1966,15 @@ function setTransformingUi(isTransforming) {
       renderPreview('', []);
     };
 
-    // Also update the generate button if it happens to be visible (text tab)
+    // Also update generate buttons if visible (text tab / md tab)
     elements.btnGenerate.disabled = false;
     elements.btnGenerate.classList.add('btn-cancel');
     elements.btnGenerate.innerHTML = '<i data-lucide="x-circle" style="width:14px;height:14px;"></i> 변환 취소';
+    if (!elements.btnGenerateMd.classList.contains('hidden')) {
+      elements.btnGenerateMd.disabled = false;
+      elements.btnGenerateMd.classList.add('btn-cancel');
+      elements.btnGenerateMd.innerHTML = '<i data-lucide="x-circle" style="width:14px;height:14px;"></i> 변환 취소';
+    }
     if (window.lucide) window.lucide.createIcons();
 
     elements.previewBody.classList.remove('hidden');
@@ -1981,6 +2000,9 @@ function setTransformingUi(isTransforming) {
     elements.btnGenerate.classList.remove('btn-cancel');
     elements.btnGenerate.disabled = false;
     elements.btnGenerate.innerHTML = '<i data-lucide="sparkles"></i> 텍스트 분석 및 플레이리스트 생성';
+    elements.btnGenerateMd.classList.remove('btn-cancel');
+    elements.btnGenerateMd.disabled = false;
+    elements.btnGenerateMd.innerHTML = '<i data-lucide="sparkles"></i> 파일 분석 및 플레이리스트 생성';
     if (window.lucide) window.lucide.createIcons();
   }
 }

@@ -1109,6 +1109,9 @@ class QueueManager {
     this.pausedAt = 0;
     this.generationAbortController = null;
     this.queueVersion = 0;
+    this.nextScheduledTime = 0;
+    this.preScheduledSource = null;
+    this.preScheduledIndex = -1;
 
     // API configuration for prefetching
     this.apiConfig = {
@@ -1132,7 +1135,7 @@ class QueueManager {
    */
   initAudio() {
     if (!this.audioCtx) {
-      this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      this.audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'playback' });
       
       // Node routing: Source -> GainNode (Volume) -> AnalyserNode (Visualizer) -> Destination (Speakers)
       this.analyserNode = this.audioCtx.createAnalyser();
@@ -1254,10 +1257,11 @@ class QueueManager {
    */
   pause() {
     if (!this.isPlaying) return;
-    
+
     this.isPlaying = false;
     this.setStatus('paused');
-    
+    this._clearPreScheduled();
+
     if (this.currentSourceNode) {
       this.currentSourceNode.onended = null;
       this.currentSourceNode.stop();
@@ -1274,6 +1278,8 @@ class QueueManager {
   stop() {
     this.isPlaying = false;
     this.setStatus('idle');
+    this._clearPreScheduled();
+    this.nextScheduledTime = 0;
 
     if (this.generationAbortController) {
       this.generationAbortController.abort();
@@ -1420,7 +1426,7 @@ class QueueManager {
    * Triggers background prefetching of the next two segments in queue.
    */
   async prefetchNext() {
-    const prefetchCount = 1; // Prefetch 1 segment ahead to reduce API quota pressure
+    const prefetchCount = 2; // Prefetch 2 segments ahead for smoother Bluetooth playback
     
     for (let i = 1; i <= prefetchCount; i++) {
       const nextIndex = this.currentIndex + i;
@@ -1442,6 +1448,7 @@ class QueueManager {
           segment.audioBuffer = await this.decodeAudio(result.arrayBuffer);
           segment.state = 'ready';
           this.releaseDistantAudioBuffers(nextIndex);
+          this._tryPreSchedule(nextIndex, segment.audioBuffer);
         } catch (err) {
           if (this.queueVersion !== capturedVersion) return;
           if (err.name === 'AbortError') {
@@ -1473,44 +1480,128 @@ class QueueManager {
   /**
    * Execute physical buffer playback.
    */
-  executePlayback(audioBuffer, offset = 0) {
-    this.setStatus('playing');
-    
-    // Create source node
+  _clearPreScheduled() {
+    if (this.preScheduledSource) {
+      this.preScheduledSource.onended = null;
+      try { this.preScheduledSource.stop(); } catch {}
+      this.preScheduledSource = null;
+    }
+    this.preScheduledIndex = -1;
+  }
+
+  _tryPreSchedule(index, audioBuffer) {
+    if (!this.isPlaying || index !== this.currentIndex + 1) return;
+    if (this.nextScheduledTime <= this.audioCtx.currentTime) return;
+    if (this.preScheduledIndex === index) return;
+    this._clearPreScheduled();
+
     const source = this.audioCtx.createBufferSource();
     source.buffer = audioBuffer;
     source.playbackRate.setValueAtTime(this.playbackRate, this.audioCtx.currentTime);
-    
-    // Connect node to routing path
     source.connect(this.gainNode);
-    this.currentSourceNode = source;
-    
-    this.startTime = this.audioCtx.currentTime - (offset / this.playbackRate);
-    
-    // Set callbacks
+
+    const duration = audioBuffer.duration / this.playbackRate;
+    const thisEndTime = this.nextScheduledTime + duration;
+
     source.onended = () => {
-      this.stopProgressTracking();
+      if (this.currentSourceNode !== source) return;
       this.currentSourceNode = null;
-      
-      if (this.isPlaying) {
-        if (this.repeatMode === 'one') {
-          this.pausedAt = 0;
-          this.playSegment(this.currentIndex);
-        } else if (this.currentIndex < this.segments.length - 1) {
-          this.currentIndex++;
-          this.pausedAt = 0;
-          this.playSegment(this.currentIndex);
-        } else if (this.repeatMode === 'all') {
-          this.currentIndex = 0;
-          this.pausedAt = 0;
-          this.playSegment(0);
+      this.stopProgressTracking();
+      if (!this.isPlaying) return;
+      if (this.currentIndex < this.segments.length - 1) {
+        this.currentIndex++;
+        this.pausedAt = 0;
+        this.nextScheduledTime = thisEndTime;
+        this.emit('segmentStart', this.currentIndex);
+        const nextSeg = this.segments[this.currentIndex];
+        if (nextSeg?.audioBuffer) {
+          this.executePlayback(nextSeg.audioBuffer, 0);
         } else {
-          this.stop();
+          this.nextScheduledTime = 0;
+          this.playSegment(this.currentIndex);
         }
+        this.prefetchNext();
+      } else if (this.repeatMode === 'all') {
+        this.currentIndex = 0;
+        this.pausedAt = 0;
+        this.nextScheduledTime = 0;
+        this.playSegment(0);
+      } else {
+        this.stop();
       }
     };
-    
-    source.start(0, offset);
+
+    source.start(this.nextScheduledTime, 0);
+    this.preScheduledSource = source;
+    this.preScheduledIndex = index;
+  }
+
+  executePlayback(audioBuffer, offset = 0, scheduledStartAt = null) {
+    this.setStatus('playing');
+
+    const now = this.audioCtx.currentTime;
+    const startAt = (scheduledStartAt !== null && scheduledStartAt > now)
+      ? scheduledStartAt : now;
+
+    const source = this.audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.playbackRate.setValueAtTime(this.playbackRate, now);
+    source.connect(this.gainNode);
+    this.currentSourceNode = source;
+
+    this.startTime = startAt - (offset / this.playbackRate);
+    const segDuration = (audioBuffer.duration - offset) / this.playbackRate;
+    this.nextScheduledTime = startAt + segDuration;
+
+    source.onended = () => {
+      this.stopProgressTracking();
+      if (this.currentSourceNode !== source) return;
+      this.currentSourceNode = null;
+
+      if (!this.isPlaying) return;
+
+      if (this.repeatMode === 'one') {
+        this.pausedAt = 0;
+        this.nextScheduledTime = 0;
+        this._clearPreScheduled();
+        this.playSegment(this.currentIndex);
+      } else if (this.currentIndex < this.segments.length - 1) {
+        this.currentIndex++;
+        this.pausedAt = 0;
+        this.emit('segmentStart', this.currentIndex);
+
+        if (this.preScheduledIndex === this.currentIndex && this.preScheduledSource) {
+          // 이미 pre-scheduled된 노드가 재생 중 — 소유권만 이전
+          this.currentSourceNode = this.preScheduledSource;
+          this.preScheduledSource = null;
+          this.preScheduledIndex = -1;
+          const seg = this.segments[this.currentIndex];
+          if (seg?.audioBuffer) this.startProgressTracking(seg.audioBuffer.duration);
+          this.prefetchNext();
+        } else {
+          this._clearPreScheduled();
+          const nextSeg = this.segments[this.currentIndex];
+          if (nextSeg?.audioBuffer) {
+            this.executePlayback(nextSeg.audioBuffer, 0);
+          } else {
+            this.nextScheduledTime = 0;
+            this.playSegment(this.currentIndex);
+          }
+          this.prefetchNext();
+        }
+      } else if (this.repeatMode === 'all') {
+        this.currentIndex = 0;
+        this.pausedAt = 0;
+        this.nextScheduledTime = 0;
+        this._clearPreScheduled();
+        this.playSegment(0);
+      } else {
+        this._clearPreScheduled();
+        this.stop();
+      }
+    };
+
+    source.start(startAt, offset);
     this.startProgressTracking(audioBuffer.duration);
   }
 
@@ -2435,14 +2526,17 @@ function setupQueueListeners() {
   // Track queue statuses
   queue.addEventListener('statusChange', (status) => {
     elements.statusBadge.className = `status-badge ${status}`;
-    
-    // Stop pulse animations if not playing
+
     if (status === 'playing') {
       elements.btnPlayPause.classList.add('playing');
       elements.btnPlayPause.innerHTML = '<i data-lucide="pause"></i>';
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     } else {
       elements.btnPlayPause.classList.remove('playing');
       elements.btnPlayPause.innerHTML = '<i data-lucide="play"></i>';
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = (status === 'paused') ? 'paused' : 'none';
+      }
     }
     
     // Status text details
@@ -2459,6 +2553,15 @@ function setupQueueListeners() {
   // Highlight active segment
   queue.addEventListener('segmentStart', (index) => {
     elements.segmentCounter.textContent = `청크 ${index + 1} / ${state.segments.length}`;
+    if ('mediaSession' in navigator) {
+      const seg = state.segments[index];
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: seg?.text?.slice(0, 60) || 'VoxFlow',
+        artist: 'AI TTS',
+        album: state.currentFile?.name || ''
+      });
+      navigator.mediaSession.playbackState = 'playing';
+    }
     
     const segment = state.segments[index];
     
@@ -2700,10 +2803,33 @@ function startVisualizer() {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     stopVisualizer();
-  } else if (!visualizerAnimationId) {
-    startVisualizer();
+  } else {
+    // 화면 복귀 시 AudioContext 재개 (화면 잠금 후 복귀 대응)
+    if (queue.audioCtx?.state === 'suspended') {
+      queue.audioCtx.resume();
+    }
+    if (!visualizerAnimationId) startVisualizer();
   }
 });
+
+// MediaSession API: 화면 꺼짐·잠금 상태에서도 오디오 계속 재생
+if ('mediaSession' in navigator) {
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: 'VoxFlow',
+    artist: 'AI TTS',
+    album: ''
+  });
+
+  navigator.mediaSession.setActionHandler('play',  () => queue.play());
+  navigator.mediaSession.setActionHandler('pause', () => queue.pause());
+  navigator.mediaSession.setActionHandler('nexttrack', () => queue.next());
+  navigator.mediaSession.setActionHandler('previoustrack', () => queue.prev());
+}
+
+// AudioContext는 사용자 제스처 없이 suspended될 수 있음 — 재개 보장
+document.addEventListener('click', () => {
+  if (queue.audioCtx?.state === 'suspended') queue.audioCtx.resume();
+}, { once: false, passive: true });
 
 window.addEventListener('pagehide', stopVisualizer);
 window.addEventListener('resize', resizeVisualizerCanvas);

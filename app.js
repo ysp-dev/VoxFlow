@@ -437,10 +437,19 @@ function formatTransformError(err) {
 
 async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail = '' } = {}) {
   const systemText = [
-    'You transform source documents into Korean-friendly TTS input.',
-    'Return only the transformed text. Do not add commentary, code fences, summaries, or metadata.',
-    'Preserve every piece of source information without omission.'
-  ].join(' ');
+    '당신은 한국어 TTS용 발화 스크립트 변환기입니다.',
+    '입력 문서를 사람이 자연스럽게 읽을 수 있는 음성 대본 형태로 변환하세요.',
+    '',
+    '규칙:',
+    '- 문서가 아니라 "낭독 스크립트"처럼 작성합니다.',
+    '- Markdown, 표, 코드, URL은 제거합니다.',
+    '- 숫자와 기호는 한국어 발화 기준으로 변환합니다.',
+    '- AI, API 같은 약어는 발음 기준으로 변환합니다.',
+    '- 문장은 자연스럽게 숨 쉴 수 있는 길이로 유지합니다.',
+    '- 기계적인 단문 반복을 피합니다.',
+    '- 청취 이해도를 최우선으로 합니다.',
+    '- 최종 출력은 평문만 허용합니다.'
+  ].join('\n');
 
   const transformRules = [
     '다음 원문을 한국어 TTS 발화 스크립트로 변환하세요. (규칙 버전: v3 / OpenAI TTS 최적화)',

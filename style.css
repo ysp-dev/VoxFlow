@@ -314,6 +314,12 @@ header {
   color: var(--primary);
 }
 
+.btn-icon.active {
+  background: rgba(139, 92, 246, 0.18);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 /* Main Workspace Grid */
 .main-grid {
   display: grid;

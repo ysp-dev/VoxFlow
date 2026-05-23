@@ -23,7 +23,8 @@
     'list-music': '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="M3 6h4"/><path d="M3 10h4"/>',
     'loader-2': '<path d="M21 12a9 9 0 1 1-6.2-8.6"/>',
     'alert-circle': '<circle cx="12" cy="12" r="10"/><path d="M12 8v5"/><path d="M12 16h.01"/>',
-    'x-circle': '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>'
+    'x-circle': '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+    'repeat': '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>'
   };
 
   function copyInlineStyles(source, target) {
@@ -960,6 +961,7 @@ class QueueManager {
     this.segments = [];
     this.currentIndex = 0;
     this.isPlaying = false;
+    this.repeatMode = false;
     this.status = 'idle'; // 'idle' | 'generating' | 'buffering' | 'playing' | 'paused'
     
     this.volume = 1.0;
@@ -1354,13 +1356,15 @@ class QueueManager {
       this.currentSourceNode = null;
       
       if (this.isPlaying) {
-        // Auto transition to next segment
         if (this.currentIndex < this.segments.length - 1) {
           this.currentIndex++;
           this.pausedAt = 0;
           this.playSegment(this.currentIndex);
+        } else if (this.repeatMode) {
+          this.currentIndex = 0;
+          this.pausedAt = 0;
+          this.playSegment(0);
         } else {
-          // Finished entire document
           this.stop();
         }
       }
@@ -1486,6 +1490,7 @@ const elements = {
   btnPlayPause: document.getElementById('btn-play-pause'),
   btnNext: document.getElementById('btn-next'),
   btnStop: document.getElementById('btn-stop'),
+  btnRepeat: document.getElementById('btn-repeat'),
   volumeSlider: document.getElementById('volume-slider'),
   speedInput: document.getElementById('speed-input'),
   
@@ -2153,6 +2158,12 @@ function setupPlayerControls() {
   elements.btnPrev.addEventListener('click', () => {
     if (state.isTransforming) return;
     queue.prev();
+  });
+
+  elements.btnRepeat.addEventListener('click', () => {
+    queue.repeatMode = !queue.repeatMode;
+    elements.btnRepeat.classList.toggle('active', queue.repeatMode);
+    elements.btnRepeat.title = queue.repeatMode ? '반복 재생 끄기' : '반복 재생';
   });
 
   // Volume Slider adjustment

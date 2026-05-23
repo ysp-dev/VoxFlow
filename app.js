@@ -251,6 +251,15 @@ const STYLE_PRESETS = {
   '속독':     '또렷하고 압축적인 리듬으로, 군더더기 없이 정보 전달에 집중해서 읽어줘.',
 };
 
+const STRUCT_STYLE_HINTS = {
+  '기본':     '',
+  '브리핑':   '핵심 내용만 추려 간결하게 작성한다. 부연 설명은 최소화하고 문장은 짧게 끊는다.',
+  '강의':     '개념을 단계적으로 풀어 설명한다. 중요한 내용은 강조 문장을 추가하거나 반복해 청취 이해도를 높인다.',
+  '오디오북': '자연스러운 이야기 흐름으로 작성한다. 장면·주제 전환은 부드럽게 연결하고 감정 표현을 살린다.',
+  '차분':     '여유 있는 속도감을 위해 문장을 길게 이어 쓴다. 쉼표와 접속어를 활용해 흐름을 늦춘다.',
+  '속독':     '문장을 최대한 압축한다. 불필요한 수식어·중복 표현을 제거하고 핵심만 남긴다.',
+};
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a   = document.createElement('a');
@@ -506,7 +515,7 @@ function splitTextIntoTransformChunks(text, maxChars = TRANSFORM_CHUNK_SIZE) {
   return chunks.filter(Boolean);
 }
 
-async function transformTextForTtsStructure(rawText, { apiKey, signal = null } = {}) {
+async function transformTextForTtsStructure(rawText, { apiKey, signal = null, structHint = '' } = {}) {
   if (!rawText || !rawText.trim()) return '';
   if (!apiKey || apiKey.trim() === '') {
     throw new Error('구조 변환을 위해 OpenAI API Key를 먼저 저장해주세요.');
@@ -519,12 +528,12 @@ async function transformTextForTtsStructure(rawText, { apiKey, signal = null } =
     let prevTail = '';
     for (const chunk of chunks) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      results.push(await transformChunkWithFallback(chunk, { apiKey, signal, prevTail }));
+      results.push(await transformChunkWithFallback(chunk, { apiKey, signal, prevTail, structHint }));
       prevTail = chunk.split('\n').slice(-4).join('\n');
     }
     transformed = results.join('\n\n');
   } else {
-    transformed = await transformChunkWithFallback(rawText, { apiKey, signal });
+    transformed = await transformChunkWithFallback(rawText, { apiKey, signal, structHint });
   }
 
   const lossIssues = verifyStructuralPreservation(rawText, transformed);
@@ -576,7 +585,7 @@ async function countdownToast(totalSec, labelPrefix, signal) {
   }
 }
 
-async function transformChunkWithFallback(rawText, { apiKey, signal = null, prevTail = '' } = {}) {
+async function transformChunkWithFallback(rawText, { apiKey, signal = null, prevTail = '', structHint = '' } = {}) {
   const retryable = new Set([429, 500, 502, 503, 504]);
   let lastError = null;
 
@@ -584,7 +593,7 @@ async function transformChunkWithFallback(rawText, { apiKey, signal = null, prev
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     setSkeletonLabel(`GPT-5 Mini 변환 중… (${attempt + 1}/${STRUCT_MAX_RETRIES}회 시도)`);
     try {
-      return await transformSingleChunk(rawText, { apiKey, signal, prevTail });
+      return await transformSingleChunk(rawText, { apiKey, signal, prevTail, structHint });
     } catch (err) {
       if (err.name === 'AbortError') throw err;
       lastError = err;
@@ -619,8 +628,8 @@ function formatTransformError(err) {
   return new Error(`구조 변환에 실패했습니다${detail}`);
 }
 
-async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail = '' } = {}) {
-  const systemText = [
+async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail = '', structHint = '' } = {}) {
+  const systemLines = [
     '당신은 한국어 TTS용 발화 스크립트 변환기입니다.',
     '입력 문서를 사람이 자연스럽게 읽을 수 있는 음성 대본 형태로 변환하세요.',
     '',
@@ -633,7 +642,11 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '- 기계적인 단문 반복을 피합니다.',
     '- 청취 이해도를 최우선으로 합니다.',
     '- 최종 출력은 평문만 허용합니다.'
-  ].join('\n');
+  ];
+  if (structHint) {
+    systemLines.push('', '=== 말투 스타일 ===', structHint);
+  }
+  const systemText = systemLines.join('\n');
 
   const transformRules = [
     '다음 원문을 한국어 TTS 발화 스크립트로 변환하세요. (규칙 버전: v3 / OpenAI TTS 최적화)',
@@ -1556,6 +1569,7 @@ const state = {
   apiKey: '',
   voice: 'marin',
   styleHint: '',
+  structHint: '',
   configSnapshot: { voice: 'marin', styleHint: '' },
   transformAbortController: null,
   parseRequestId: 0,
@@ -2079,6 +2093,7 @@ function setupSettings() {
       elements.presetChips.forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
       state.styleHint = STYLE_PRESETS[chip.dataset.preset] ?? '';
+      state.structHint = STRUCT_STYLE_HINTS[chip.dataset.preset] ?? '';
       syncConfig();
       flushAudioBuffers();
     });
@@ -2141,7 +2156,8 @@ async function triggerParsing() {
   try {
     const transformedText = await transformTextForTtsStructure(sourceText, {
       apiKey: state.apiKey,
-      signal: state.transformAbortController.signal
+      signal: state.transformAbortController.signal,
+      structHint: state.structHint
     });
 
     if (parseRequestId !== state.parseRequestId) return false;

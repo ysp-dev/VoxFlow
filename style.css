@@ -281,6 +281,12 @@ header {
   transform: translateY(0);
 }
 
+.btn-sm {
+  font-size: 11px;
+  padding: 5px 12px;
+  gap: 5px;
+}
+
 .btn-secondary {
   background: rgba(248, 250, 252, 0.9);
   border-color: var(--border-light);
@@ -386,7 +392,8 @@ header {
 .rich-textarea {
   width: 100%;
   flex-grow: 1;
-  min-height: 240px;
+  min-height: 120px;
+  max-height: 120px;
   background: rgba(255, 255, 255, 0.82);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);

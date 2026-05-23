@@ -24,7 +24,10 @@
     'loader-2': '<path d="M21 12a9 9 0 1 1-6.2-8.6"/>',
     'alert-circle': '<circle cx="12" cy="12" r="10"/><path d="M12 8v5"/><path d="M12 16h.01"/>',
     'x-circle': '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
-    'repeat': '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>'
+    'repeat': '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+    'clipboard': '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h6"/>',
+    'download': '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+    'file-minus': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15h6"/>'
   };
 
   function copyInlineStyles(source, target) {
@@ -206,7 +209,7 @@ async function setCachedAudio(key, arrayBuffer) {
 }
 
 async function makeTtsCacheKey(text, voice, styleHint) {
-  const raw = `${voice}||${styleHint}||${text}`;
+  const raw = `${TTS_MODEL}||mp3||${voice}||${styleHint}||${text}`;
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
@@ -228,6 +231,143 @@ async function clearTtsCache() {
     return count;
   } catch { return null; }
 }
+async function getCacheCount() {
+  try {
+    const db = await openTtsCacheDb();
+    return await new Promise((resolve) => {
+      const req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).count();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror   = () => resolve(0);
+    });
+  } catch { return 0; }
+}
+
+async function clearCurrentDocCache() {
+  if (!state.segments.length) return 0;
+  try {
+    const db = await openTtsCacheDb();
+    let count = 0;
+    for (const seg of state.segments) {
+      const key = await makeTtsCacheKey(stripTtsMarkers(seg.text), state.voice, state.styleHint);
+      await new Promise(resolve => {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_STORE);
+        const req = store.get(key);
+        req.onsuccess = () => {
+          if (req.result !== undefined) { store.delete(key); count++; }
+          tx.oncomplete = resolve;
+          tx.onerror    = resolve;
+        };
+        req.onerror = resolve;
+      });
+    }
+    return count;
+  } catch { return 0; }
+}
+
+const STYLE_PRESETS = {
+  '기본':     '',
+  '브리핑':   '핵심만 간결하고 명확하게 전달하는 전문적인 브리핑 톤으로 읽어줘. 군더더기 없이.',
+  '강의':     '학생을 가르치는 교수처럼 친절하고 설명적인 강의 톤으로 읽어줘. 중요한 부분은 천천히.',
+  '오디오북': '오디오북 전문 낭독자처럼 감정을 담아 자연스럽고 몰입감 있게 읽어줘.',
+  '차분':     '차분하고 안정감 있는 목소리로, 여유 있는 속도로 읽어줘.',
+  '속독':     '빠르고 또렷하게, 정보 전달에 집중해서 읽어줘.',
+};
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function fallbackCopyText(text) {
+  let copied = false;
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
+    document.body.appendChild(ta);
+    ta.select();
+    copied = document.execCommand('copy');
+    document.body.removeChild(ta);
+  } catch { /* fall through */ }
+
+  if (copied) {
+    showNotification('대본이 클립보드에 복사되었습니다.', 'success');
+  } else {
+    const title = (state.currentFile?.name?.replace(/\.[^.]+$/, '') || 'voxflow-script').replace(/[^\w가-힣]/g, '_');
+    downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), `${title}.txt`);
+    showNotification('클립보드 접근 불가 — 텍스트 파일로 저장했습니다.', 'success');
+  }
+}
+
+async function exportFullAudio(onProgress) {
+  if (!queue.segments.length) {
+    showNotification('내보낼 오디오가 없습니다.', 'warning');
+    return false;
+  }
+  if (!state.apiKey) {
+    showNotification('오디오 생성에 API Key가 필요합니다.', 'error');
+    return false;
+  }
+
+  const mp3Buffers = [];
+  const total = queue.segments.length;
+
+  for (let i = 0; i < total; i++) {
+    const seg = queue.segments[i];
+    onProgress?.(i, total);
+
+    const cleanText = stripTtsMarkers(seg.text);
+    const cacheKey  = await makeTtsCacheKey(cleanText, state.voice, state.styleHint);
+    let arrayBuffer = await getCachedAudio(cacheKey);
+    if (!arrayBuffer) {
+      const result = await generateSpeech(seg.text, {
+        apiKey: state.apiKey,
+        voice: state.voice,
+        styleHint: state.styleHint
+      });
+      arrayBuffer = result.arrayBuffer;
+    }
+    mp3Buffers.push(arrayBuffer);
+  }
+
+  const totalBytes = mp3Buffers.reduce((sum, b) => sum + b.byteLength, 0);
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const buf of mp3Buffers) {
+    merged.set(new Uint8Array(buf), offset);
+    offset += buf.byteLength;
+  }
+
+  const title = (state.currentFile?.name?.replace(/\.[^.]+$/, '') || 'voxflow').replace(/[^\w가-힣]/g, '_');
+  downloadBlob(new Blob([merged], { type: 'audio/mpeg' }), `${title}.mp3`);
+  return true;
+}
+
+function updateRepeatButton() {
+  const mode  = queue.repeatMode;
+  const label = { none: '반복 없음', all: '전체 반복', one: '현재 청크 반복' }[mode];
+  const badge = { none: '', all: '∞', one: '1' }[mode];
+  elements.btnRepeat.classList.toggle('active', mode !== 'none');
+  elements.btnRepeat.setAttribute('aria-pressed', String(mode !== 'none'));
+  elements.btnRepeat.title = label;
+  elements.btnRepeat.setAttribute('aria-label', label);
+  const badgeEl = elements.btnRepeat.querySelector('.repeat-badge');
+  if (badgeEl) badgeEl.textContent = badge;
+}
+
+async function refreshCacheCount() {
+  const n = await getCacheCount();
+  if (elements.cacheCountBadge) elements.cacheCountBadge.textContent = `캐시 ${n}개`;
+}
+
+function updateExportRowVisibility() {
+  if (!elements.exportRow) return;
+  elements.exportRow.classList.toggle('hidden', state.segments.length === 0);
+}
+
 const MAX_READY_AUDIO_BUFFERS = 12;
 
 function sleep(ms, signal = null) {
@@ -966,7 +1106,7 @@ class QueueManager {
     this.segments = [];
     this.currentIndex = 0;
     this.isPlaying = false;
-    this.repeatMode = false;
+    this.repeatMode = 'none'; // 'none' | 'one' | 'all'
     this.status = 'idle'; // 'idle' | 'generating' | 'buffering' | 'playing' | 'paused'
     
     this.volume = 1.0;
@@ -1361,11 +1501,14 @@ class QueueManager {
       this.currentSourceNode = null;
       
       if (this.isPlaying) {
-        if (this.currentIndex < this.segments.length - 1) {
+        if (this.repeatMode === 'one') {
+          this.pausedAt = 0;
+          this.playSegment(this.currentIndex);
+        } else if (this.currentIndex < this.segments.length - 1) {
           this.currentIndex++;
           this.pausedAt = 0;
           this.playSegment(this.currentIndex);
-        } else if (this.repeatMode) {
+        } else if (this.repeatMode === 'all') {
           this.currentIndex = 0;
           this.pausedAt = 0;
           this.playSegment(0);
@@ -1484,7 +1627,13 @@ const elements = {
   btnGenerateMd: document.getElementById('btn-generate-md'),
   
   selectVoice: document.getElementById('select-voice'),
+  presetChips: document.querySelectorAll('.chip[data-preset]'),
   btnClearCache: document.getElementById('btn-clear-cache'),
+  btnClearDocCache: document.getElementById('btn-clear-doc-cache'),
+  cacheCountBadge: document.getElementById('cache-count-badge'),
+  btnExportScript: document.getElementById('btn-export-script'),
+  btnExportAudio: document.getElementById('btn-export-audio'),
+  exportRow: document.getElementById('export-row'),
   
   visualizer: document.getElementById('visualizer-canvas'),
   statusBadge: document.getElementById('status-badge'),
@@ -1525,6 +1674,8 @@ document.addEventListener('DOMContentLoaded', () => {
   setupPlayerControls();
   setupQueueListeners();
   setupTextareaCounter();
+  refreshCacheCount();
+  updateRepeatButton();
 
   elements.btnSourceToggle.addEventListener('click', () => {
     if (currentViewMode === 'raw') {
@@ -1549,6 +1700,53 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       showNotification(`TTS 캐시 ${count}개 항목이 삭제되었습니다.`, 'success');
     }
+    refreshCacheCount();
+  });
+
+  elements.btnClearDocCache.addEventListener('click', async () => {
+    if (!state.segments.length) {
+      showNotification('삭제할 문서 캐시가 없습니다.', 'warning');
+      return;
+    }
+    const btn = elements.btnClearDocCache;
+    btn.disabled = true;
+    const count = await clearCurrentDocCache();
+    if (count > 0) flushAudioBuffers();
+    btn.disabled = false;
+    showNotification(count > 0 ? `현재 문서 캐시 ${count}개 항목이 삭제되었습니다.` : '현재 문서의 캐시가 없습니다.', count > 0 ? 'success' : 'warning');
+    refreshCacheCount();
+  });
+
+  elements.btnExportScript.addEventListener('click', () => {
+    if (!state.segments.length) {
+      showNotification('내보낼 대본이 없습니다.', 'warning');
+      return;
+    }
+    const text = state.segments.map((s, i) => `[${i + 1}] ${s.text}`).join('\n\n');
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => showNotification('대본이 클립보드에 복사되었습니다.', 'success'),
+        () => fallbackCopyText(text)
+      );
+    } else {
+      fallbackCopyText(text);
+    }
+  });
+
+  elements.btnExportAudio.addEventListener('click', async () => {
+    const btn = elements.btnExportAudio;
+    const origHtml = btn.innerHTML;
+    btn.disabled = true;
+    const ok = await exportFullAudio((done, total) => {
+      btn.textContent = `생성 중 ${done + 1}/${total}…`;
+    }).catch(err => {
+      showNotification(`MP3 내보내기 실패: ${err.message}`, 'error');
+      return false;
+    });
+    btn.disabled = false;
+    btn.innerHTML = origHtml;
+    if (window.lucide) window.lucide.createIcons();
+    if (ok) showNotification('MP3 내보내기가 완료되었습니다.', 'success');
   });
 
   // Start the beautiful canvas visualizer loop
@@ -1583,9 +1781,10 @@ function setupApiKey() {
     elements.apiKeyInput.focus();
     elements.apiKeyInput.select();
   });
-  elements.btnDeleteApiKey.addEventListener('click', () => {
+  elements.btnDeleteApiKey.addEventListener('click', async () => {
     cancelTransform();
     queue.stop();
+    flushAudioBuffers();
     localStorage.removeItem('voxflow_openai_api_key');
     sessionStorage.removeItem('voxflow_openai_api_key');
     state.apiKey = '';
@@ -1593,7 +1792,8 @@ function setupApiKey() {
     elements.apiKeyInput.value = '';
     elements.chkPersistKey.checked = false;
     setApiKeyEditMode(true);
-    clearTtsCache();
+    await clearTtsCache();
+    refreshCacheCount();
     showNotification('API Key와 TTS 캐시가 삭제되었습니다.', 'success');
   });
 
@@ -1859,14 +2059,22 @@ function setupSettings() {
 
   const syncConfig = () => {
     state.voice = elements.selectVoice.value;
-    queue.setConfig({
-      apiKey: state.apiKey,
-      voice: state.voice,
-      styleHint: ''
-    });
+    queue.setConfig({ apiKey: state.apiKey, voice: state.voice, styleHint: state.styleHint });
   };
 
   elements.selectVoice.addEventListener('change', () => { syncConfig(); flushAudioBuffers(); });
+
+  // Preset chips
+  elements.presetChips.forEach(chip => {
+    chip.addEventListener('click', () => {
+      elements.presetChips.forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      state.styleHint = STYLE_PRESETS[chip.dataset.preset] ?? '';
+      syncConfig();
+      flushAudioBuffers();
+    });
+  });
+
   syncConfig();
 }
 
@@ -2024,11 +2232,13 @@ function renderPreview(htmlContent, segments) {
     elements.previewTitle.innerHTML = '<i data-lucide="book-open"></i> 스마트 프리뷰어';
     elements.btnToggleView.classList.add('hidden');
     elements.btnSourceToggle.classList.add('hidden');
+    updateExportRowVisibility();
     if (window.lucide) window.lucide.createIcons();
     return;
   }
 
   state.lastRender = { html: htmlContent, segments };
+  updateExportRowVisibility();
   
   elements.segmentCounter.textContent = `청크 1 / ${segments.length}`;
   
@@ -2172,9 +2382,9 @@ function setupPlayerControls() {
   });
 
   elements.btnRepeat.addEventListener('click', () => {
-    queue.repeatMode = !queue.repeatMode;
-    elements.btnRepeat.classList.toggle('active', queue.repeatMode);
-    elements.btnRepeat.title = queue.repeatMode ? '반복 재생 끄기' : '반복 재생';
+    const next = { none: 'all', all: 'one', one: 'none' };
+    queue.repeatMode = next[queue.repeatMode] ?? 'none';
+    updateRepeatButton();
   });
 
   // Volume Slider adjustment

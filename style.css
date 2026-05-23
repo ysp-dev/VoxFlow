@@ -582,6 +582,77 @@ header {
   grid-column: span 2;
 }
 
+/* Preset Chips */
+.preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  background: rgba(248, 250, 252, 0.9);
+  border: 1px solid var(--border-light);
+  border-radius: 20px;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  white-space: nowrap;
+}
+
+.chip:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.chip.active {
+  background: rgba(139, 92, 246, 0.12);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* Cache Manager Row */
+.cache-manager-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.cache-count-badge {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+/* Export Row */
+.export-row {
+  display: flex;
+  gap: 8px;
+  padding: 10px 24px;
+  border-top: 1px solid var(--border-light);
+}
+
+/* Repeat button badge overlay */
+.btn-repeat {
+  position: relative;
+}
+
+.repeat-badge {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--primary);
+  line-height: 1;
+}
+
 @media (max-width: 480px) {
   .style-hint-wrapper {
     grid-column: span 1;
@@ -1167,7 +1238,11 @@ header {
   header { flex-direction: column; align-items: stretch; gap: 14px; padding: 14px; }
   .logo-text { font-size: 22px; }
   .apikey-container, .apikey-input-wrapper { width: 100%; }
-  .apikey-input { min-width: 0; width: 100%; }
+  .apikey-input-wrapper { flex-wrap: wrap; row-gap: 8px; }
+  .apikey-input { flex: 1; min-width: 0; }
+  .apikey-persist-label { margin-left: 0; }
+  .preview-header-row { flex-wrap: wrap; gap: 8px 6px; }
+  .preview-title { flex: 1 1 100%; }
   .main-grid { gap: 14px; }
   .input-panel, .preview-panel, .player-dashboard, .visualizer-container { padding: 16px; border-radius: var(--radius-lg); }
   .tab-btn { min-height: 42px; font-size: 12px; gap: 6px; }

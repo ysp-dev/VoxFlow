@@ -1475,7 +1475,6 @@ const elements = {
   btnGenerateMd: document.getElementById('btn-generate-md'),
   
   selectVoice: document.getElementById('select-voice'),
-  inputStyleHint: document.getElementById('input-style-hint'),
   btnClearCache: document.getElementById('btn-clear-cache'),
   
   visualizer: document.getElementById('visualizer-canvas'),
@@ -1840,28 +1839,18 @@ function setupTextareaCounter() {
    ========================================================================== */
 
 function setupSettings() {
-  // Sync initial configuration values
   state.voice = elements.selectVoice.value;
-  state.styleHint = elements.inputStyleHint.value;
 
-  // Key sync helper
   const syncConfig = () => {
     state.voice = elements.selectVoice.value;
-    state.styleHint = elements.inputStyleHint.value.trim();
-
     queue.setConfig({
       apiKey: state.apiKey,
       voice: state.voice,
-      styleHint: state.styleHint
+      styleHint: ''
     });
   };
 
-  // Voice change is discrete: flush cached audio immediately
   elements.selectVoice.addEventListener('change', () => { syncConfig(); flushAudioBuffers(); });
-  // Style hint: sync config live; flush happens at play time if config drifted
-  elements.inputStyleHint.addEventListener('input', syncConfig);
-
-  // Trigger sync on loaded
   syncConfig();
 }
 

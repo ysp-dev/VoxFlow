@@ -738,7 +738,7 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     'R9. 숫자·영문 혼합 식별자는 자연스러운 한국어 발화/설명 뒤에 원문을 괄호 병기한다: 모델명(GPT-5), 버전(v2.1.3), 코드값(A-102), 전화번호(010-1234), IP 주소(192.168.0.1), 이메일(user@test.com).',
     '',
     '=== 기호 규칙 ===',
-    'R10. 수식 기호: + → 더하기, - → 빼기, × → 곱하기, ÷ → 나누기, = → 같습니다.',
+    'R10. 수식 기호는 한국어 발화형 뒤에 원문 기호를 괄호로 병기한다: + → 더하기(+), - → 빼기(-), × → 곱하기(×), ÷ → 나누기(÷), = → 같습니다(=).',
     '',
     'R11. 비교 기호: > → 초과, < → 미만, ≥ → 이상, ≤ → 이하.',
     '',
@@ -847,7 +847,7 @@ function removeDisplayOnlyEnglishParentheticals(text) {
   return String(text || '')
     .replace(/\s*[\(（]([^()（）]*)[\)）]/g, (match, inner) => {
       const body = String(inner || '').trim();
-      if (/[A-Za-z0-9]/.test(body) && !/[가-힣]/.test(body)) return '';
+      if (!/[가-힣]/.test(body) && /[A-Za-z0-9+\-×÷=<>≥≤~%/.:]/.test(body)) return '';
       return match;
     })
     .replace(/\s+([,.;:!?。！？])/g, '$1')

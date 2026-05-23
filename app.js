@@ -868,7 +868,6 @@ class QueueManager {
     this.eventListeners = {
       statusChange: [],
       segmentStart: [],
-      segmentEnd: [],
       progress: [],
       stateUpdate: []
     };
@@ -1250,7 +1249,6 @@ class QueueManager {
         } else {
           // Finished entire document
           this.stop();
-          this.emit('segmentEnd', this.currentIndex);
         }
       }
     };

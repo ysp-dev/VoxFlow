@@ -1149,7 +1149,25 @@ class QueueManager {
     }
     
     if (this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume();
+      this.audioCtx.resume().catch(() => {});
+    }
+  }
+
+  primeForAutoplay() {
+    this.initAudio();
+    if (!this.audioCtx || !this.gainNode) return;
+
+    try {
+      const buffer = this.audioCtx.createBuffer(1, 1, this.audioCtx.sampleRate);
+      const source = this.audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this.gainNode);
+      source.onended = () => {
+        try { source.disconnect(); } catch {}
+      };
+      source.start(0);
+    } catch {
+      // If silent priming is blocked, the normal play button remains the fallback.
     }
   }
 
@@ -2240,6 +2258,10 @@ async function triggerParsing() {
     queue.setSegments([]);
     renderPreview('', []);
     return false;
+  }
+
+  if (elements.chkAutoplay.checked) {
+    queue.primeForAutoplay();
   }
 
   state.isTransforming = true;

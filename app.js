@@ -376,7 +376,7 @@ async function countdownToast(totalSec, labelPrefix, signal) {
     container.setAttribute('role', 'status');
     container.setAttribute('aria-live', 'polite');
     container.setAttribute('aria-atomic', 'false');
-    container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+    container.style.cssText = 'position:fixed;top:calc(env(safe-area-inset-top, 0px) + 64px);right:max(env(safe-area-inset-right, 0px) + 16px, 20px);z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
     document.body.appendChild(container);
   }
   const toast = document.createElement('div');
@@ -2221,7 +2221,7 @@ function showNotification(message, type = 'error') {
     container.setAttribute('role', 'status');
     container.setAttribute('aria-live', 'polite');
     container.setAttribute('aria-atomic', 'false');
-    container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+    container.style.cssText = 'position:fixed;top:calc(env(safe-area-inset-top, 0px) + 64px);right:max(env(safe-area-inset-right, 0px) + 16px, 20px);z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
     document.body.appendChild(container);
   }
 

@@ -214,14 +214,19 @@ async function makeTtsCacheKey(text, voice, styleHint) {
 async function clearTtsCache() {
   try {
     const db = await openTtsCacheDb();
+    const count = await new Promise((resolve) => {
+      const req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).count();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror   = () => resolve(0);
+    });
     await new Promise((resolve, reject) => {
       const tx = db.transaction(IDB_STORE, 'readwrite');
       tx.objectStore(IDB_STORE).clear();
       tx.oncomplete = resolve;
       tx.onerror    = () => reject(tx.error);
     });
-    return true;
-  } catch { return false; }
+    return count;
+  } catch { return null; }
 }
 const MAX_READY_AUDIO_BUFFERS = 12;
 
@@ -1534,10 +1539,16 @@ document.addEventListener('DOMContentLoaded', () => {
   elements.btnClearCache.addEventListener('click', async () => {
     const btn = elements.btnClearCache;
     btn.disabled = true;
-    const ok = await clearTtsCache();
-    if (ok) flushAudioBuffers();
+    const count = await clearTtsCache();
+    if (count !== null) flushAudioBuffers();
     btn.disabled = false;
-    showNotification(ok ? 'TTS 캐시가 초기화되었습니다.' : '캐시 초기화 중 오류가 발생했습니다.', ok ? 'success' : 'error');
+    if (count === null) {
+      showNotification('캐시 초기화 중 오류가 발생했습니다.', 'error');
+    } else if (count === 0) {
+      showNotification('초기화할 캐시가 없습니다.', 'warning');
+    } else {
+      showNotification(`TTS 캐시 ${count}개 항목이 삭제되었습니다.`, 'success');
+    }
   });
 
   // Start the beautiful canvas visualizer loop

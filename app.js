@@ -244,7 +244,16 @@ function verifyStructuralPreservation(original, transformed) {
   const tokens = extractContentTokens(original);
   if (tokens.length >= 4) {
     const trLower = transformed.toLowerCase();
-    const missing = tokens.filter(t => !trLower.includes(t.toLowerCase()));
+    const missing = tokens.filter(t => {
+      const tLow = t.toLowerCase();
+      if (trLower.includes(tLow)) return false;
+      // 한국어 어근 매칭: 변환 규칙이 어미/조사를 바꾸므로 마지막 1~2자를 제외한 어근으로 재검사
+      if (/[가-힣]/.test(t) && t.length >= 4) {
+        const stem = tLow.slice(0, Math.max(3, t.length - 2));
+        if (trLower.includes(stem)) return false;
+      }
+      return true;
+    });
     const missingRate = missing.length / tokens.length;
     // Paragraph rewriting can legitimately rephrase ~40% of tokens; flag above that.
     if (missingRate > 0.4) {

@@ -1359,7 +1359,9 @@ const state = {
   configSnapshot: { voice: 'alloy', styleHint: '' },
   transformAbortController: null,
   parseRequestId: 0,
-  isTransforming: false
+  isTransforming: false,
+  rawHtml: '',
+  lastRender: { html: '', segments: [] }
 };
 
 // Instantiate Playback Queue Manager
@@ -1424,6 +1426,7 @@ const elements = {
   previewTitle: document.getElementById('preview-title'),
   previewBody: document.getElementById('preview-body'),
   playlistContainer: document.getElementById('playlist-container'),
+  btnSourceToggle: document.getElementById('btn-source-toggle'),
   btnToggleView: document.getElementById('btn-toggle-view')
 };
 
@@ -1442,6 +1445,16 @@ document.addEventListener('DOMContentLoaded', () => {
   setupPlayerControls();
   setupQueueListeners();
   setupTextareaCounter();
+
+  elements.btnSourceToggle.addEventListener('click', () => {
+    if (currentViewMode === 'raw') {
+      // 스마트 프리뷰로 복귀
+      renderPreview(state.lastRender.html, state.lastRender.segments);
+    } else {
+      // 원문 보기
+      if (state.rawHtml) showRawPreview(state.currentFile?.content ?? '');
+    }
+  });
   
   // Start the beautiful canvas visualizer loop
   startVisualizer();
@@ -1621,6 +1634,8 @@ function setupUploadZone() {
     e.stopPropagation(); // Avoid triggering upload click
     cancelTransform();
     state.currentFile = null;
+    state.rawHtml = '';
+    state.lastRender = { html: '', segments: [] };
     elements.fileInput.value = '';
     elements.fileInfoCard.classList.add('hidden');
     elements.uploadZone.classList.remove('hidden');
@@ -1681,11 +1696,20 @@ function showRawPreview(content) {
   const html = window.marked
     ? sanitizeHtmlFragment(window.marked.parse(content))
     : `<pre style="white-space:pre-wrap;word-break:break-word;font-size:13px;">${content.replace(/</g, '&lt;')}</pre>`;
-  elements.previewTitle.innerHTML = '<i data-lucide="book-open"></i> 원문 미리보기';
+  state.rawHtml = html;
+  currentViewMode = 'raw';
+  elements.previewTitle.innerHTML = '<i data-lucide="file-text"></i> 원문 미리보기';
   elements.btnToggleView.classList.add('hidden');
   elements.previewBody.innerHTML = html;
   elements.previewBody.classList.remove('hidden');
   elements.playlistContainer.classList.add('hidden');
+  // 스마트 프리뷰 결과가 있으면 토글 버튼 표시
+  if (state.lastRender.segments.length > 0) {
+    elements.btnSourceToggle.innerHTML = '<i data-lucide="sparkles" style="width:12px;height:12px;"></i> 스마트 프리뷰';
+    elements.btnSourceToggle.classList.remove('hidden');
+  } else {
+    elements.btnSourceToggle.classList.add('hidden');
+  }
   if (window.lucide) window.lucide.createIcons();
 }
 
@@ -1864,6 +1888,8 @@ function setTransformingUi(isTransforming) {
     if (window.lucide) window.lucide.createIcons();
 
     elements.previewTitle.innerHTML = '<i data-lucide="book-open"></i> 스마트 프리뷰어';
+    elements.btnSourceToggle.classList.add('hidden');
+    elements.btnToggleView.classList.add('hidden');
     elements.previewBody.classList.remove('hidden');
     elements.playlistContainer.classList.add('hidden');
     elements.previewBody.innerHTML = `
@@ -1898,6 +1924,7 @@ function renderPreview(htmlContent, segments) {
   elements.playlistContainer.innerHTML = '';
   
   if (segments.length === 0) {
+    state.lastRender = { html: '', segments: [] };
     elements.previewBody.innerHTML = '<p class="text-muted text-center" style="grid-column: span 2; padding: 40px 0;">분석 및 렌더링된 데이터가 없습니다. 원고를 입력하거나 파일을 업로드하세요.</p>';
     elements.playlistContainer.innerHTML = '<p class="text-muted text-center" style="padding: 20px 0;">플레이리스트가 비어 있습니다.</p>';
     elements.segmentCounter.textContent = '청크 0 / 0';
@@ -1906,9 +1933,12 @@ function renderPreview(htmlContent, segments) {
     elements.playlistContainer.classList.add('hidden');
     elements.previewTitle.innerHTML = '<i data-lucide="book-open"></i> 스마트 프리뷰어';
     elements.btnToggleView.classList.add('hidden');
+    elements.btnSourceToggle.classList.add('hidden');
     if (window.lucide) window.lucide.createIcons();
     return;
   }
+
+  state.lastRender = { html: htmlContent, segments };
   
   elements.segmentCounter.textContent = `청크 1 / ${segments.length}`;
   
@@ -1967,23 +1997,37 @@ function renderPreview(htmlContent, segments) {
   });
   
   // Toggle layout logic
+  currentViewMode = 'preview';
+  elements.previewTitle.innerHTML = '<i data-lucide="book-open"></i> 스마트 프리뷰어';
+  elements.previewBody.classList.remove('hidden');
+  elements.playlistContainer.classList.add('hidden');
+
   elements.btnToggleView.classList.remove('hidden');
+  elements.btnToggleView.innerHTML = '<i data-lucide="list-music" style="width:12px;height:12px;"></i> Playlist Mode';
   elements.btnToggleView.onclick = () => {
     if (currentViewMode === 'preview') {
       currentViewMode = 'playlist';
       elements.previewBody.classList.add('hidden');
       elements.playlistContainer.classList.remove('hidden');
       elements.previewTitle.innerHTML = '<i data-lucide="list-music"></i> 플레이리스트 뷰';
-      elements.btnToggleView.innerHTML = '<i data-lucide="book-open"></i> Preview Mode';
+      elements.btnToggleView.innerHTML = '<i data-lucide="book-open" style="width:12px;height:12px;"></i> Preview Mode';
     } else {
       currentViewMode = 'preview';
       elements.playlistContainer.classList.add('hidden');
       elements.previewBody.classList.remove('hidden');
       elements.previewTitle.innerHTML = '<i data-lucide="book-open"></i> 스마트 프리뷰어';
-      elements.btnToggleView.innerHTML = '<i data-lucide="list-music"></i> Playlist Mode';
+      elements.btnToggleView.innerHTML = '<i data-lucide="list-music" style="width:12px;height:12px;"></i> Playlist Mode';
     }
     if (window.lucide) window.lucide.createIcons();
   };
+
+  // 원문이 있으면 원문 보기 토글 표시
+  if (state.rawHtml) {
+    elements.btnSourceToggle.innerHTML = '<i data-lucide="file-text" style="width:12px;height:12px;"></i> 원문 보기';
+    elements.btnSourceToggle.classList.remove('hidden');
+  } else {
+    elements.btnSourceToggle.classList.add('hidden');
+  }
   
   // Render Lucide icons inside playlist items
   if (window.lucide) {

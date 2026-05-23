@@ -1364,7 +1364,6 @@ const elements = {
   visualizer: document.getElementById('visualizer-canvas'),
   statusBadge: document.getElementById('status-badge'),
   statusText: document.getElementById('status-text'),
-  btnCancelTransform: document.getElementById('btn-cancel-transform'),
   segmentCounter: document.getElementById('segment-counter'),
   
   btnPrev: document.getElementById('btn-prev'),
@@ -1809,16 +1808,7 @@ function setTransformingUi(isTransforming) {
     elements.statusBadge.className = 'status-badge generating';
     elements.statusText.textContent = 'GPT-5 Mini 변환 중';
 
-    // Dedicated cancel button (always visible in visualizer header)
-    elements.btnCancelTransform.classList.remove('hidden');
-    elements.btnCancelTransform.onclick = () => {
-      cancelTransform();
-      state.segments = [];
-      queue.setSegments([]);
-      renderPreview('', []);
-    };
-
-    // Also update generate buttons if visible (text tab / md tab)
+    // Update generate buttons if visible (text tab / md tab)
     elements.btnGenerate.disabled = false;
     elements.btnGenerate.classList.add('btn-cancel');
     elements.btnGenerate.innerHTML = '<i data-lucide="x-circle" style="width:14px;height:14px;"></i> 변환 취소';
@@ -1847,8 +1837,6 @@ function setTransformingUi(isTransforming) {
     elements.statusBadge.className = `status-badge ${queue.status === 'idle' ? 'idle' : queue.status}`;
     elements.statusText.textContent = queue.status === 'idle' ? '대기 중' : elements.statusText.textContent;
 
-    elements.btnCancelTransform.classList.add('hidden');
-    elements.btnCancelTransform.onclick = null;
 
     elements.btnGenerate.classList.remove('btn-cancel');
     elements.btnGenerate.disabled = false;

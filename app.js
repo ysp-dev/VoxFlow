@@ -260,6 +260,28 @@ const STRUCT_STYLE_HINTS = {
   '속독':     '문장을 최대한 압축한다. 불필요한 수식어·중복 표현을 제거하고 핵심만 남긴다.',
 };
 
+const ENGLISH_PRONUNCIATION_OVERRIDES = {
+  call: '콜',
+  calls: '콜',
+  callback: '콜백',
+  callbacks: '콜백',
+  cache: '캐시',
+  cached: '캐시된',
+  caching: '캐싱',
+  token: '토큰',
+  tokens: '토큰',
+  prompt: '프롬프트',
+  prompts: '프롬프트',
+  model: '모델',
+  models: '모델',
+  stream: '스트림',
+  streaming: '스트리밍',
+  batch: '배치',
+  branch: '브랜치',
+  commit: '커밋',
+  push: '푸시'
+};
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a   = document.createElement('a');
@@ -697,6 +719,8 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '  괄호 안 영문은 화면 표시용 원문 보존이며, 낭독 대상이 아니다.',
     '',
     'R14. 영문 단어/제품명/조직명은 가능한 한 한글 발음 또는 한국어 설명으로 변환하고, 필요한 경우 바로 뒤에 영문 원문을 괄호로 병기한다.',
+    '  한국어 표기는 철자식이 아니라 실제 영어 발음·국내 IT 관용 표기를 따른다. call은 칼이 아니라 콜(call), callback은 콜백(callback), cache는 캐시(cache), token은 토큰(token), prompt는 프롬프트(prompt)로 쓴다.',
+    '  모호하면 국립국어원 외래어 표기법의 영어 발음 표기 원칙과 국내 기술문서 관용 표기를 우선한다.',
     '  긴 영문 문장은 한국어 설명형으로 변환하며, 원문 전체를 길게 괄호 병기하지 않는다.',
     '',
     '=== URL 규칙 ===',
@@ -771,6 +795,14 @@ function stripTtsMarkers(text) {
     .trim();
 }
 
+function normalizeEnglishPronunciationParentheticals(text) {
+  return String(text || '').replace(/([가-힣]+)\s*[\(（]\s*([A-Za-z][A-Za-z0-9_-]*)\s*[\)）]/g, (match, hangul, english) => {
+    const preferred = ENGLISH_PRONUNCIATION_OVERRIDES[english.toLowerCase()];
+    if (!preferred) return match;
+    return `${preferred}(${english})`;
+  });
+}
+
 function removeDisplayOnlyEnglishParentheticals(text) {
   return String(text || '')
     .replace(/\s*[\(（]([^()（）]*)[\)）]/g, (match, inner) => {
@@ -784,7 +816,7 @@ function removeDisplayOnlyEnglishParentheticals(text) {
 }
 
 function getNarrationText(text) {
-  return removeDisplayOnlyEnglishParentheticals(stripTtsMarkers(text));
+  return removeDisplayOnlyEnglishParentheticals(normalizeEnglishPronunciationParentheticals(stripTtsMarkers(text)));
 }
 
 async function generateSpeech(text, { apiKey, voice = 'marin', styleHint = '', signal = null }) {
@@ -943,6 +975,7 @@ function splitLongText(text, maxChars = MAX_TTS_CHARS) {
  */
 function parsePlainInput(plainText) {
   if (!plainText) return { html: '', segments: [] };
+  plainText = normalizeEnglishPronunciationParentheticals(plainText);
   
   const segments = [];
   let segmentId = 0;
@@ -1021,6 +1054,7 @@ function sanitizeHtmlFragment(html) {
  */
 function parseMarkdown(markdownText) {
   if (!markdownText) return { html: '', segments: [] };
+  markdownText = normalizeEnglishPronunciationParentheticals(markdownText);
   
   // 1. Convert markdown to HTML using marked.js loaded in the window
   if (!window.marked) {

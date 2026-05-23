@@ -329,6 +329,37 @@ const DIGIT_PRONUNCIATIONS = {
   '9': '구'
 };
 
+const KOREAN_SMALL_NUMBER_VALUES = {
+  공: '0',
+  영: '0',
+  일: '1',
+  한: '1',
+  하나: '1',
+  이: '2',
+  두: '2',
+  둘: '2',
+  삼: '3',
+  세: '3',
+  셋: '3',
+  사: '4',
+  네: '4',
+  넷: '4',
+  오: '5',
+  다섯: '5',
+  육: '6',
+  여섯: '6',
+  칠: '7',
+  일곱: '7',
+  팔: '8',
+  여덟: '8',
+  구: '9',
+  아홉: '9',
+  십: '10',
+  열: '10'
+};
+
+const SOURCE_NUMBER_UNITS = '년|개월|월|일|회|건|개|명|차|단계|번|분|초|시간|원|달러|퍼센트';
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a   = document.createElement('a');
@@ -751,6 +782,7 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '  퍼센트 25% → 이십오 퍼센트(25%)',
     '  범위 3~5 → 삼에서 오(3~5)',
     '  날짜 5/23 → 오월 이십삼일(5/23)',
+    '  숫자+단위는 발화형 단위 뒤에 원문을 괄호 병기한다. 2년 → 이 년(2년), 3개월 → 삼 개월(3개월), 5건 → 오 건(5건).',
     '  금액, 시간, 버전, 단계, 순번, 코드, 전화번호, IP 주소처럼 숫자가 하나라도 들어간 값도 모두 괄호로 원문을 보존한다.',
     '',
     'R9. 숫자·영문 혼합 식별자는 자연스러운 한국어 발화/설명 뒤에 원문을 괄호 병기한다: 모델명(GPT-5), 버전(v2.1.3), 코드값(A-102), 전화번호(010-1234), IP 주소(192.168.0.1), 이메일(user@test.com).',
@@ -863,8 +895,18 @@ function getDigitByDigitCodePronunciation(value) {
   return prefix + digits;
 }
 
+function addSourceNumberUnitParentheticals(text) {
+  const unitPattern = SOURCE_NUMBER_UNITS;
+  const pattern = new RegExp(`(^|[^가-힣\\d(（])(${Object.keys(KOREAN_SMALL_NUMBER_VALUES).join('|')})\\s+(${unitPattern})(?!\\s*[)）])(?!(?:\\s*[\\(（][^\\n\\)）]*[\\)）]))`, 'g');
+  return String(text || '').replace(pattern, (match, prefix, numberWord, unit) => {
+    const value = KOREAN_SMALL_NUMBER_VALUES[numberWord];
+    if (!value) return match;
+    return `${prefix}${numberWord} ${unit}(${value}${unit})`;
+  });
+}
+
 function normalizeEnglishPronunciationParentheticals(text) {
-  return String(text || '')
+  return addSourceNumberUnitParentheticals(String(text || '')
     .replace(/([가-힣]{1,12}(?:\s+[가-힣]{1,12})?)\s*[\(（]\s*(MT\d{2,6})\s*[\)）]/gi, (match, hangul, code) => {
       const preferred = getDigitByDigitCodePronunciation(code);
       if (!preferred) return match;
@@ -874,7 +916,7 @@ function normalizeEnglishPronunciationParentheticals(text) {
       const preferred = getDigitByDigitCodePronunciation(english) || getAcronymPronunciation(english) || ENGLISH_PRONUNCIATION_OVERRIDES[english.toLowerCase()];
       if (!preferred) return match;
       return `${preferred}(${english})`;
-    });
+    }));
 }
 
 function removeDisplayOnlyEnglishParentheticals(text) {

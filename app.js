@@ -171,8 +171,8 @@
  * @returns {Promise<{mimeType: string, base64Data: string}>} The audio data structure.
  */
 const DEFAULT_TTS_MODEL = 'gemini-3.1-flash-tts-preview';
-const TTS_FALLBACK_MODELS = ['gemini-3.1-flash-tts-preview', 'gemini-2.5-flash-preview-tts'];
-const TTS_ATTEMPTS_PER_MODEL = 2;
+const TTS_FALLBACK_MODELS = ['gemini-3.1-flash-tts-preview', 'gemini-2.5-pro-preview-tts', 'gemini-2.5-flash-preview-tts'];
+const TTS_ATTEMPTS_PER_MODEL = 1;
 const STRUCTURE_TRANSFORM_MODELS = ['gemini-3.5-flash', 'gemini-2.5-flash'];
 const STRUCTURE_ATTEMPTS_PER_MODEL = 2;
 const MAX_TTS_CHARS = 700;

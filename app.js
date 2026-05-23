@@ -360,6 +360,89 @@ const KOREAN_SMALL_NUMBER_VALUES = {
 
 const SOURCE_NUMBER_UNITS = '년|개월|월|일|회|건|개|명|차|단계|번|분|초|시간|원|달러|퍼센트';
 
+const NATIVE_KOREAN_COUNTER_ONES = {
+  1: '한',
+  2: '두',
+  3: '세',
+  4: '네',
+  5: '다섯',
+  6: '여섯',
+  7: '일곱',
+  8: '여덟',
+  9: '아홉'
+};
+
+const NATIVE_KOREAN_COUNTER_TENS = {
+  1: '열',
+  2: '스물',
+  3: '서른',
+  4: '마흔',
+  5: '쉰',
+  6: '예순',
+  7: '일흔',
+  8: '여든',
+  9: '아흔'
+};
+
+const NATIVE_KOREAN_COUNTER_TENS_EXACT = {
+  2: '스무'
+};
+
+function getNativeKoreanCounterNumber(value) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isInteger(n) || n < 1 || n > 99) return '';
+  if (n < 10) return NATIVE_KOREAN_COUNTER_ONES[n];
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  if (ones === 0) return NATIVE_KOREAN_COUNTER_TENS_EXACT[tens] || NATIVE_KOREAN_COUNTER_TENS[tens];
+  return `${NATIVE_KOREAN_COUNTER_TENS[tens]}${NATIVE_KOREAN_COUNTER_ONES[ones]}`;
+}
+
+const SINO_KOREAN_NUMBER_ONES = {
+  1: '일',
+  2: '이',
+  3: '삼',
+  4: '사',
+  5: '오',
+  6: '육',
+  7: '칠',
+  8: '팔',
+  9: '구'
+};
+
+function getSinoKoreanNumber(value) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isInteger(n) || n < 1 || n > 99) return '';
+  if (n < 10) return SINO_KOREAN_NUMBER_ONES[n];
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  return `${tens > 1 ? SINO_KOREAN_NUMBER_ONES[tens] : ''}십${ones ? SINO_KOREAN_NUMBER_ONES[ones] : ''}`;
+}
+
+const LECTURE_WEEK_WORD_TO_NUMBER = new Map([
+  ['첫', '1'],
+  ...Array.from({ length: 99 }, (_, index) => {
+    const value = String(index + 1);
+    return [
+      [getNativeKoreanCounterNumber(value), value],
+      [getSinoKoreanNumber(value), value]
+    ];
+  }).flat()
+]);
+
+const LECTURE_WEEK_WORD_PATTERN = [...LECTURE_WEEK_WORD_TO_NUMBER.keys()]
+  .filter(Boolean)
+  .sort((a, b) => b.length - a.length)
+  .join('|');
+
+const ANSWER_CHOICE_PRONUNCIATION_TO_LETTER = new Map(
+  Object.entries(ACRONYM_LETTER_PRONUNCIATIONS).map(([letter, pronunciation]) => [pronunciation, letter])
+);
+
+const ANSWER_CHOICE_PRONUNCIATION_PATTERN = [...ANSWER_CHOICE_PRONUNCIATION_TO_LETTER.keys()]
+  .sort((a, b) => b.length - a.length)
+  .join('|');
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a   = document.createElement('a');
@@ -642,7 +725,7 @@ async function transformTextForTtsStructure(rawText, { apiKey, signal = null, st
     throw new Error('구조 변환 중 정보 누락이 감지되었습니다:\n' + lossIssues.join('\n'));
   }
 
-  return transformed;
+  return normalizeSpeechTextForDisplay(transformed);
 }
 
 function setSkeletonLabel(msg) {
@@ -783,6 +866,7 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '  범위 3~5 → 삼에서 오(3~5)',
     '  날짜 5/23 → 오월 이십삼일(5/23)',
     '  숫자+단위는 발화형 단위 뒤에 원문을 괄호 병기한다. 2년 → 이 년(2년), 3개월 → 삼 개월(3개월), 5건 → 오 건(5건).',
+    '  예외: 강의/수업 주차 표기는 화면 표시용 문장에서는 원문 숫자를 유지한다. 9주차 강의 → 9주차 강의. 낭독 시에는 구주차로 읽는다.',
     '  금액, 시간, 버전, 단계, 순번, 코드, 전화번호, IP 주소처럼 숫자가 하나라도 들어간 값도 모두 괄호로 원문을 보존한다.',
     '',
     'R9. 숫자·영문 혼합 식별자는 자연스러운 한국어 발화/설명 뒤에 원문을 괄호 병기한다: 모델명(GPT-5), 버전(v2.1.3), 코드값(A-102), 전화번호(010-1234), IP 주소(192.168.0.1), 이메일(user@test.com).',
@@ -799,6 +883,7 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '=== 영문 처리 규칙 ===',
     'R13. 약어/영문 용어 발음 병기: AI → 에이아이(AI), API → 에이피아이(API), GPU → 지피유(GPU), LLM → 엘엘엠(LLM), OCR → 오씨알(OCR), OpenAI → 오픈에이아이(OpenAI).',
     '  괄호 안 영문은 화면 표시용 원문 보존이며, 낭독 대상이 아니다.',
+    '  정답/보기처럼 단독 알파벳 선택지는 화면 표시용 문장에서는 원문 대문자를 유지한다. 정답은 C입니다 → 정답은 C입니다. 낭독 시에는 씨입니다로 읽는다.',
     '',
     'R14. 영문 단어/제품명/조직명은 가능한 한 한글 발음 또는 한국어 설명으로 변환하고, 필요한 경우 바로 뒤에 영문 원문을 괄호로 병기한다.',
     '  원문에 영문자가 하나라도 들어간 단어, 약어, 제품명, 함수명, 필드명, 명령어, 파일명은 모두 괄호로 원문을 보존한다.',
@@ -919,6 +1004,73 @@ function normalizeEnglishPronunciationParentheticals(text) {
     }));
 }
 
+function getLectureWeekNumber(value) {
+  const token = String(value || '').replace(/\s+/g, '');
+  if (/^[1-9]\d?$/.test(token)) return String(Number.parseInt(token, 10));
+  return LECTURE_WEEK_WORD_TO_NUMBER.get(token) || '';
+}
+
+function normalizeLectureWeekForDisplay(text) {
+  const weekTokenPattern = `(?:[1-9]\\d?|${LECTURE_WEEK_WORD_PATTERN})`;
+  const weekSourcePattern = new RegExp(`(${weekTokenPattern})\\s*주\\s*차\\s*[\\(（]\\s*(${weekTokenPattern})\\s*주\\s*차\\s*[\\)）]`, 'g');
+  const weekWordPattern = new RegExp(`(${LECTURE_WEEK_WORD_PATTERN})\\s*주\\s*차`, 'g');
+
+  return String(text || '')
+    .replace(weekSourcePattern, (match, outer, inner) => {
+      const numberText = getLectureWeekNumber(inner) || getLectureWeekNumber(outer);
+      return numberText ? `${numberText}주차` : match;
+    })
+    .replace(/(^|[^\d])([1-9]\d?)\s*주\s*차/g, (match, prefix, numberText) => {
+      return `${prefix}${Number.parseInt(numberText, 10)}주차`;
+    })
+    .replace(weekWordPattern, (match, weekWord) => {
+      const numberText = getLectureWeekNumber(weekWord);
+      return numberText ? `${numberText}주차` : match;
+    });
+}
+
+function normalizeLectureWeekForNarration(text) {
+  return normalizeLectureWeekForDisplay(text)
+    .replace(/(^|[^\d])([1-9]\d?)주차/g, (match, prefix, numberText) => {
+      const spoken = getSinoKoreanNumber(numberText);
+      return spoken ? `${prefix}${spoken}주차` : match;
+    });
+}
+
+function normalizeAnswerChoiceLettersForDisplay(text) {
+  const answerContextPattern = new RegExp(`((?:정답|해답|답|보기|선택지)[^.!?。！？\\n]{0,12}?)(${ANSWER_CHOICE_PRONUNCIATION_PATTERN})(?:\\s*[\\(（]\\s*([A-Z])\\s*[\\)）])?(?=(?:입니다|이다|이에요|예요|였|였습니다|[은는이가을를와과도]|번|항|형|안|선택지|답|$|[\\s,.;:!?。！？)\\]）]))`, 'g');
+  return String(text || '')
+    .replace(answerContextPattern, (match, prefix, pronunciation, parentheticalLetter) => {
+      return `${prefix}${parentheticalLetter || ANSWER_CHOICE_PRONUNCIATION_TO_LETTER.get(pronunciation) || pronunciation}`;
+    })
+    .replace(/([A-Z])\s+(입니다|이다|이에요|예요)/g, '$1$2');
+}
+
+function normalizeStandaloneAnswerChoiceLetters(text) {
+  return String(text || '')
+    .replace(/(^|[^A-Za-z0-9(（])([A-Z])(?=(?:입니다|이다|이에요|예요|였|였습니다|[은는이가을를와과도]|번|항|형|안|선택지|답|$|[\s,.;:!?。！？)\]）]))/g, (match, prefix, letter) => {
+      const spoken = ACRONYM_LETTER_PRONUNCIATIONS[letter];
+      return spoken ? `${prefix}${spoken}` : match;
+    })
+    .replace(/(에이|비|씨|디|이|에프|지|에이치|아이|제이|케이|엘|엠|엔|오|피|큐|알|에스|티|유|브이|더블유|엑스|와이|제트)\s+(입니다|이다|이에요|예요)/g, '$1$2');
+}
+
+function normalizeSpeechTextForDisplay(text) {
+  return normalizeAnswerChoiceLettersForDisplay(
+    normalizeLectureWeekForDisplay(
+      normalizeEnglishPronunciationParentheticals(text)
+    )
+  );
+}
+
+function normalizeSpeechTextForNarration(text) {
+  return normalizeStandaloneAnswerChoiceLetters(
+    normalizeLectureWeekForNarration(
+      normalizeEnglishPronunciationParentheticals(text)
+    )
+  );
+}
+
 function removeDisplayOnlyEnglishParentheticals(text) {
   return String(text || '')
     .replace(/\s*[\(（]([^()（）]*)[\)）]/g, (match, inner) => {
@@ -932,7 +1084,7 @@ function removeDisplayOnlyEnglishParentheticals(text) {
 }
 
 function getNarrationText(text) {
-  return removeDisplayOnlyEnglishParentheticals(normalizeEnglishPronunciationParentheticals(stripTtsMarkers(text)));
+  return removeDisplayOnlyEnglishParentheticals(normalizeSpeechTextForNarration(stripTtsMarkers(text)));
 }
 
 async function generateSpeech(text, { apiKey, voice = 'marin', styleHint = '', signal = null }) {
@@ -1091,7 +1243,7 @@ function splitLongText(text, maxChars = MAX_TTS_CHARS) {
  */
 function parsePlainInput(plainText) {
   if (!plainText) return { html: '', segments: [] };
-  plainText = normalizeEnglishPronunciationParentheticals(plainText);
+  plainText = normalizeSpeechTextForDisplay(plainText);
   
   const segments = [];
   let segmentId = 0;
@@ -1170,7 +1322,7 @@ function sanitizeHtmlFragment(html) {
  */
 function parseMarkdown(markdownText) {
   if (!markdownText) return { html: '', segments: [] };
-  markdownText = normalizeEnglishPronunciationParentheticals(markdownText);
+  markdownText = normalizeSpeechTextForDisplay(markdownText);
   
   // 1. Convert markdown to HTML using marked.js loaded in the window
   if (!window.marked) {

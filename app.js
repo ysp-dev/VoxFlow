@@ -649,7 +649,12 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
         const canRetry = retryableStatuses.has(error.status) || /internal error|temporarily|unavailable/i.test(error.message || '');
         const isLastAttemptForModel = attempt === TTS_ATTEMPTS_PER_MODEL - 1;
 
-        if (!canRetry) break; // non-retryable: skip to next model
+        if (!canRetry) {
+          // 400/403 등 모델을 바꿔도 해결되지 않는 오류 → 즉시 중단
+          if (error.status === 400) throw new Error('TTS 요청이 거부되었습니다. 입력 텍스트 또는 API Key를 확인해주세요.');
+          if (error.status === 403) throw new Error('API Key 권한이 없습니다. Gemini API 사용 권한을 확인해주세요.');
+          throw error;
+        }
         if (isLastAttemptForModel) break; // exhausted attempts for this model
 
         if (isQuota) {
@@ -1234,7 +1239,6 @@ class QueueManager {
     // Case 2: Audio is actively generating
     if (segment.state === 'generating') {
       this.setStatus('buffering');
-      // Wait for it to become ready
       const checkInterval = setInterval(() => {
         if (!this.isPlaying || this.currentIndex !== index) {
           clearInterval(checkInterval);
@@ -1247,6 +1251,10 @@ class QueueManager {
           clearInterval(checkInterval);
           this.setStatus('idle');
           showNotification(`음성 재생 실패: ${segment.errorMsg}`);
+        } else if (segment.state === 'idle') {
+          // abort로 인해 idle로 돌아온 경우 → 직접 생성 재시작
+          clearInterval(checkInterval);
+          this.playSegment(index, offset);
         }
       }, 100);
       return;

@@ -207,6 +207,19 @@ async function setCachedAudio(key, arrayBuffer) {
 function makeTtsCacheKey(text, voice, styleHint) {
   return `${voice}||${styleHint}||${text}`;
 }
+
+async function clearTtsCache() {
+  try {
+    const db = await openTtsCacheDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).clear();
+      tx.oncomplete = resolve;
+      tx.onerror    = () => reject(tx.error);
+    });
+    return true;
+  } catch { return false; }
+}
 const MAX_READY_AUDIO_BUFFERS = 12;
 
 function sleep(ms, signal = null) {
@@ -1457,6 +1470,7 @@ const elements = {
   
   selectVoice: document.getElementById('select-voice'),
   inputStyleHint: document.getElementById('input-style-hint'),
+  btnClearCache: document.getElementById('btn-clear-cache'),
   
   visualizer: document.getElementById('visualizer-canvas'),
   statusBadge: document.getElementById('status-badge'),
@@ -1507,6 +1521,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   
+  elements.btnClearCache.addEventListener('click', async () => {
+    const btn = elements.btnClearCache;
+    btn.disabled = true;
+    const ok = await clearTtsCache();
+    btn.disabled = false;
+    showNotification(ok ? 'TTS 캐시가 초기화되었습니다.' : '캐시 초기화 중 오류가 발생했습니다.', ok ? 'success' : 'error');
+  });
+
   // Start the beautiful canvas visualizer loop
   startVisualizer();
   

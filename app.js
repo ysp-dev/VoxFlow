@@ -1266,7 +1266,12 @@ class QueueManager {
       if (this.isPlaying && this.currentIndex === index) {
         this.isPlaying = false;
         this.setStatus('idle');
-        showNotification(`음성 생성 실패: ${err.message}`);
+        showNotification(`음성 생성 실패: ${err.message}`, 'error', () => {
+          segment.state = 'idle';
+          segment.errorMsg = null;
+          this.emit('stateUpdate', this.segments);
+          this.play();
+        });
       }
     }
   }
@@ -2213,7 +2218,7 @@ function formatTime(secs) {
   return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
 
-function showNotification(message, type = 'error') {
+function showNotification(message, type = 'error', onRetry = null) {
   let container = document.getElementById('notification-container');
   if (!container) {
     container = document.createElement('div');
@@ -2246,12 +2251,23 @@ function showNotification(message, type = 'error') {
     const body = document.createElement('div');
     body.textContent = message;
     const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'margin-top:10px;text-align:right;';
-    const btn = document.createElement('button');
-    btn.textContent = '확인';
-    btn.style.cssText = `background:transparent;border:1px solid ${s.border};color:${s.color};padding:3px 12px;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;`;
-    btn.addEventListener('click', dismiss);
-    btnRow.appendChild(btn);
+    btnRow.style.cssText = 'margin-top:10px;display:flex;justify-content:flex-end;gap:8px;';
+
+    const mkBtn = (label, onClick) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = `background:transparent;border:1px solid ${s.border};color:${s.color};padding:3px 12px;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;`;
+      b.addEventListener('click', onClick);
+      return b;
+    };
+
+    if (onRetry) {
+      btnRow.appendChild(mkBtn('닫기', dismiss));
+      btnRow.appendChild(mkBtn('재시도', () => { dismiss(); onRetry(); }));
+    } else {
+      btnRow.appendChild(mkBtn('확인', dismiss));
+    }
+
     toast.appendChild(body);
     toast.appendChild(btnRow);
   } else {

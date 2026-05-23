@@ -163,7 +163,7 @@
  */
 
 const TTS_MODEL = 'gpt-4o-mini-tts';
-const STRUCT_MODEL = 'gpt-5-mini';
+const STRUCT_MODEL = 'gpt-5.4-mini';
 const TTS_MAX_RETRIES = 2;
 const STRUCT_MAX_RETRIES = 3;
 const MAX_TTS_CHARS = 500;

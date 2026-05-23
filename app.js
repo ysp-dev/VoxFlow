@@ -1723,6 +1723,8 @@ const elements = {
   statusBadge: document.getElementById('status-badge'),
   statusText: document.getElementById('status-text'),
   segmentCounter: document.getElementById('segment-counter'),
+  nowPlayingBar: document.getElementById('now-playing-bar'),
+  nowPlayingText: document.getElementById('npb-text'),
   
   btnPrev: document.getElementById('btn-prev'),
   btnPlayPause: document.getElementById('btn-play-pause'),
@@ -2527,6 +2529,8 @@ function setupQueueListeners() {
   queue.addEventListener('statusChange', (status) => {
     elements.statusBadge.className = `status-badge ${status}`;
 
+    const isActive = ['playing', 'generating', 'buffering'].includes(status);
+
     if (status === 'playing') {
       elements.btnPlayPause.classList.add('playing');
       elements.btnPlayPause.innerHTML = '<i data-lucide="pause"></i>';
@@ -2538,14 +2542,24 @@ function setupQueueListeners() {
         navigator.mediaSession.playbackState = (status === 'paused') ? 'paused' : 'none';
       }
     }
-    
+
+    // Now-playing bar 표시/숨김
+    elements.nowPlayingBar.classList.toggle('visible', isActive);
+
+    // WakeLock — 재생 중 화면 꺼짐 방지
+    if (isActive) {
+      acquireWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+
     // Status text details
     let label = '대기';
     if (status === 'generating') label = '음성 생성 중...';
     if (status === 'buffering') label = '버퍼링 중...';
     if (status === 'playing') label = '재생 중';
     if (status === 'paused') label = '일시 정지';
-    
+
     elements.statusText.textContent = label;
     if (window.lucide) window.lucide.createIcons();
   });
@@ -2553,8 +2567,12 @@ function setupQueueListeners() {
   // Highlight active segment
   queue.addEventListener('segmentStart', (index) => {
     elements.segmentCounter.textContent = `청크 ${index + 1} / ${state.segments.length}`;
+
+    // Now-playing bar 텍스트 업데이트
+    const seg = state.segments[index];
+    if (seg?.text) elements.nowPlayingText.textContent = seg.text;
+
     if ('mediaSession' in navigator) {
-      const seg = state.segments[index];
       navigator.mediaSession.metadata = new MediaMetadata({
         title: seg?.text?.slice(0, 60) || 'VoxFlow',
         artist: 'AI TTS',
@@ -2800,6 +2818,24 @@ function startVisualizer() {
   draw();
 }
 
+// ── Screen Wake Lock ──────────────────────────────────────────────────────────
+let wakeLockSentinel = null;
+
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  if (wakeLockSentinel && !wakeLockSentinel.released) return;
+  try {
+    wakeLockSentinel = await navigator.wakeLock.request('screen');
+  } catch { /* 권한 거부 또는 미지원 — 무시 */ }
+}
+
+function releaseWakeLock() {
+  if (wakeLockSentinel && !wakeLockSentinel.released) {
+    wakeLockSentinel.release();
+    wakeLockSentinel = null;
+  }
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     stopVisualizer();
@@ -2807,6 +2843,10 @@ document.addEventListener('visibilitychange', () => {
     // 화면 복귀 시 AudioContext 재개 (화면 잠금 후 복귀 대응)
     if (queue.audioCtx?.state === 'suspended') {
       queue.audioCtx.resume();
+    }
+    // WakeLock은 화면 꺼짐 시 자동 해제되므로 재생 중이면 재취득
+    if (queue.status === 'playing' || queue.status === 'generating' || queue.status === 'buffering') {
+      acquireWakeLock();
     }
     if (!visualizerAnimationId) startVisualizer();
   }

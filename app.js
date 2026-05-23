@@ -316,6 +316,19 @@ const ACRONYM_LETTER_PRONUNCIATIONS = {
   Z: '제트'
 };
 
+const DIGIT_PRONUNCIATIONS = {
+  '0': '공',
+  '1': '일',
+  '2': '이',
+  '3': '삼',
+  '4': '사',
+  '5': '오',
+  '6': '육',
+  '7': '칠',
+  '8': '팔',
+  '9': '구'
+};
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a   = document.createElement('a');
@@ -741,6 +754,7 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '  금액, 시간, 버전, 단계, 순번, 코드, 전화번호, IP 주소처럼 숫자가 하나라도 들어간 값도 모두 괄호로 원문을 보존한다.',
     '',
     'R9. 숫자·영문 혼합 식별자는 자연스러운 한국어 발화/설명 뒤에 원문을 괄호 병기한다: 모델명(GPT-5), 버전(v2.1.3), 코드값(A-102), 전화번호(010-1234), IP 주소(192.168.0.1), 이메일(user@test.com).',
+    '  단, SWIFT 전문 유형처럼 MT 뒤에 숫자가 붙은 코드는 숫자를 자리별로 읽는다. MT103 → 엠티일공삼(MT103), MT202 → 엠티이공이(MT202). 0은 공으로 읽는다.',
     '',
     '=== 기호 규칙 ===',
     'R10. 수식 기호는 한국어 발화형 뒤에 원문 기호를 괄호로 병기한다: + → 더하기(+), - → 빼기(-), × → 곱하기(×), ÷ → 나누기(÷), = → 같습니다(=).',
@@ -840,12 +854,27 @@ function getAcronymPronunciation(value) {
   return token.split('').map(letter => ACRONYM_LETTER_PRONUNCIATIONS[letter] || letter).join('');
 }
 
+function getDigitByDigitCodePronunciation(value) {
+  const token = String(value || '').trim().toUpperCase();
+  const match = token.match(/^(MT)(\d{2,6})$/);
+  if (!match) return '';
+  const prefix = getAcronymPronunciation(match[1]);
+  const digits = match[2].split('').map(digit => DIGIT_PRONUNCIATIONS[digit] || digit).join('');
+  return prefix + digits;
+}
+
 function normalizeEnglishPronunciationParentheticals(text) {
-  return String(text || '').replace(/([가-힣]+)\s*[\(（]\s*([A-Za-z][A-Za-z0-9_-]*)\s*[\)）]/g, (match, hangul, english) => {
-    const preferred = getAcronymPronunciation(english) || ENGLISH_PRONUNCIATION_OVERRIDES[english.toLowerCase()];
-    if (!preferred) return match;
-    return `${preferred}(${english})`;
-  });
+  return String(text || '')
+    .replace(/([가-힣]{1,12}(?:\s+[가-힣]{1,12})?)\s*[\(（]\s*(MT\d{2,6})\s*[\)）]/gi, (match, hangul, code) => {
+      const preferred = getDigitByDigitCodePronunciation(code);
+      if (!preferred) return match;
+      return `${preferred}(${code})`;
+    })
+    .replace(/([가-힣]+)\s*[\(（]\s*([A-Za-z][A-Za-z0-9_-]*)\s*[\)）]/g, (match, hangul, english) => {
+      const preferred = getDigitByDigitCodePronunciation(english) || getAcronymPronunciation(english) || ENGLISH_PRONUNCIATION_OVERRIDES[english.toLowerCase()];
+      if (!preferred) return match;
+      return `${preferred}(${english})`;
+    });
 }
 
 function removeDisplayOnlyEnglishParentheticals(text) {

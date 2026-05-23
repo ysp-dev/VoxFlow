@@ -574,8 +574,12 @@ async function generateSpeech(text, { apiKey, model = DEFAULT_TTS_MODEL, voice =
       const qt = lastError?.status === 429
         ? parseQuotaType(lastError.message, parseFloat(lastError.retryAfterHeader))
         : null;
-      const reason = qt ? `${qt} 초과` : '실패';
+      const reason = qt ? `${qt} 초과` : '내부 오류';
       showNotification(`TTS ${modelsToTry[mi - 1]} ${reason} → ${currentModel} 로 전환합니다.`, 'warning');
+      // 내부 오류(500/503)는 일시적 과부하일 수 있으므로 전환 전 3초 대기
+      if (lastError?.status !== 429) {
+        await sleep(3000, signal);
+      }
     }
 
     const payload = {

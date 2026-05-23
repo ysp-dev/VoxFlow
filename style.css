@@ -393,7 +393,6 @@ header {
   width: 100%;
   flex-grow: 1;
   min-height: 120px;
-  max-height: 120px;
   background: rgba(255, 255, 255, 0.82);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);

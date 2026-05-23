@@ -204,8 +204,10 @@ async function setCachedAudio(key, arrayBuffer) {
   } catch { /* 캐시 저장 실패는 무시 */ }
 }
 
-function makeTtsCacheKey(text, voice, styleHint) {
-  return `${voice}||${styleHint}||${text}`;
+async function makeTtsCacheKey(text, voice, styleHint) {
+  const raw = `${voice}||${styleHint}||${text}`;
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 async function clearTtsCache() {
@@ -244,6 +246,9 @@ function extractContentTokens(text) {
   const tokens = new Set();
   const addWord = (word) => {
     const w = word.replace(/[*_`#[\]()]/g, '').trim();
+    // All-uppercase tokens (API, URL, AI, HTML, JSON…) are phonetically transliterated
+    // by the transform rules, so they will never appear verbatim in the output.
+    if (/^[A-Z]+$/.test(w)) return;
     if (w.length >= 2 && (/[가-힣]/.test(w) || /^[A-Za-z]+$/.test(w)) && !/\d/.test(w)) {
       tokens.add(w);
     }
@@ -632,7 +637,7 @@ async function generateSpeech(text, { apiKey, voice = 'marin', styleHint = '', s
   const cleanText = stripTtsMarkers(text);
 
   // 캐시 조회 — 히트 시 API 호출 없이 즉시 반환
-  const cacheKey = makeTtsCacheKey(cleanText, voice, styleHint);
+  const cacheKey = await makeTtsCacheKey(cleanText, voice, styleHint);
   const cached = await getCachedAudio(cacheKey);
   if (cached) return { arrayBuffer: cached, fromCache: true };
 
@@ -1438,6 +1443,7 @@ function flushAudioBuffers() {
       seg.audioBuffer = null;
       if (seg.state === 'ready' || seg.state === 'generating') seg.state = 'idle';
     });
+    queue.emit('stateUpdate', queue.segments);
   }
   state.configSnapshot = { voice: state.voice, styleHint: state.styleHint };
 }
@@ -1525,6 +1531,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const btn = elements.btnClearCache;
     btn.disabled = true;
     const ok = await clearTtsCache();
+    if (ok) flushAudioBuffers();
     btn.disabled = false;
     showNotification(ok ? 'TTS 캐시가 초기화되었습니다.' : '캐시 초기화 중 오류가 발생했습니다.', ok ? 'success' : 'error');
   });
@@ -1571,7 +1578,8 @@ function setupApiKey() {
     elements.apiKeyInput.value = '';
     elements.chkPersistKey.checked = false;
     setApiKeyEditMode(true);
-    showNotification('API Key가 삭제되었습니다.', 'success');
+    clearTtsCache();
+    showNotification('API Key와 TTS 캐시가 삭제되었습니다.', 'success');
   });
 
   elements.apiKeyInput.addEventListener('keydown', (e) => {
@@ -1644,6 +1652,10 @@ function setupTabs() {
       elements.contentMdInput.classList.remove('active');
       cancelTransform();
       state.segments = [];
+      state.rawHtml = '';
+      state.currentFile = null;
+      state.lastRender = { html: '', segments: [] };
+      currentViewMode = 'preview';
       queue.setSegments([]);
       renderPreview('', []);
     }

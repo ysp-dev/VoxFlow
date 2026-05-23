@@ -652,6 +652,33 @@ header {
   color: var(--primary);
 }
 
+/* Auto-play toggle */
+.autoplay-row {
+  margin-top: 10px;
+}
+
+.autoplay-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.autoplay-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.autoplay-label:hover {
+  color: var(--primary);
+}
+
 /* Cache Manager Row */
 .cache-manager-row {
   display: flex;

@@ -27,7 +27,6 @@
     'repeat': '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
     'clipboard': '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h6"/>',
     'download': '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
-    'file-minus': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15h6"/>'
   };
 
   function copyInlineStyles(source, target) {
@@ -242,28 +241,6 @@ async function getCacheCount() {
   } catch { return 0; }
 }
 
-async function clearCurrentDocCache() {
-  if (!state.segments.length) return 0;
-  try {
-    const db = await openTtsCacheDb();
-    let count = 0;
-    for (const seg of state.segments) {
-      const key = await makeTtsCacheKey(stripTtsMarkers(seg.text), state.voice, state.styleHint);
-      await new Promise(resolve => {
-        const tx = db.transaction(IDB_STORE, 'readwrite');
-        const store = tx.objectStore(IDB_STORE);
-        const req = store.get(key);
-        req.onsuccess = () => {
-          if (req.result !== undefined) { store.delete(key); count++; }
-          tx.oncomplete = resolve;
-          tx.onerror    = resolve;
-        };
-        req.onerror = resolve;
-      });
-    }
-    return count;
-  } catch { return 0; }
-}
 
 const STYLE_PRESETS = {
   '기본':     '',
@@ -1627,9 +1604,9 @@ const elements = {
   btnGenerateMd: document.getElementById('btn-generate-md'),
   
   selectVoice: document.getElementById('select-voice'),
+  chkAutoplay: document.getElementById('chk-autoplay'),
   presetChips: document.querySelectorAll('.chip[data-preset]'),
   btnClearCache: document.getElementById('btn-clear-cache'),
-  btnClearDocCache: document.getElementById('btn-clear-doc-cache'),
   cacheCountBadge: document.getElementById('cache-count-badge'),
   btnExportScript: document.getElementById('btn-export-script'),
   btnExportAudio: document.getElementById('btn-export-audio'),
@@ -1704,19 +1681,6 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshCacheCount();
   });
 
-  elements.btnClearDocCache.addEventListener('click', async () => {
-    if (!state.segments.length) {
-      showNotification('삭제할 문서 캐시가 없습니다.', 'warning');
-      return;
-    }
-    const btn = elements.btnClearDocCache;
-    btn.disabled = true;
-    const count = await clearCurrentDocCache();
-    if (count > 0) flushAudioBuffers();
-    btn.disabled = false;
-    showNotification(count > 0 ? `현재 문서 캐시 ${count}개 항목이 삭제되었습니다.` : '현재 문서의 캐시가 없습니다.', count > 0 ? 'success' : 'warning');
-    refreshCacheCount();
-  });
 
   elements.btnExportScript.addEventListener('click', () => {
     if (!state.segments.length) {
@@ -2186,6 +2150,9 @@ async function triggerParsing() {
     state.configSnapshot = { voice: state.voice, styleHint: state.styleHint };
     renderPreview(parseResult.html, parseResult.segments);
     showNotification('GPT-5 Mini 구조 변환이 완료되었습니다.', 'success');
+    if (elements.chkAutoplay.checked) {
+      await queue.play();
+    }
     return true;
   } catch (err) {
     if (err.name === 'AbortError') return false;

@@ -568,7 +568,7 @@ function stripTtsMarkers(text) {
     .trim();
 }
 
-async function generateSpeech(text, { apiKey, voice = 'alloy', styleHint = '', signal = null }) {
+async function generateSpeech(text, { apiKey, voice = 'marin', styleHint = '', signal = null }) {
   if (!apiKey || apiKey.trim() === '') {
     throw new Error('OpenAI API Key가 누락되었습니다. 상단 설정 바에서 API Key를 입력해주세요.');
   }
@@ -905,7 +905,7 @@ class QueueManager {
     // API configuration for prefetching
     this.apiConfig = {
       apiKey: '',
-      voice: 'alloy',
+      voice: 'marin',
       styleHint: ''
     };
     
@@ -1354,9 +1354,9 @@ const state = {
   currentFile: null,
   segments: [],
   apiKey: '',
-  voice: 'alloy',
+  voice: 'marin',
   styleHint: '',
-  configSnapshot: { voice: 'alloy', styleHint: '' },
+  configSnapshot: { voice: 'marin', styleHint: '' },
   transformAbortController: null,
   parseRequestId: 0,
   isTransforming: false,

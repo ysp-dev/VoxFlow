@@ -248,7 +248,7 @@ const STYLE_PRESETS = {
   '강의':     '학생을 가르치는 교수처럼 친절하고 설명적인 강의 톤으로 읽어줘. 중요한 부분은 천천히.',
   '오디오북': '오디오북 전문 낭독자처럼 감정을 담아 자연스럽고 몰입감 있게 읽어줘.',
   '차분':     '차분하고 안정감 있는 목소리로, 여유 있는 속도로 읽어줘.',
-  '속독':     '빠르고 또렷하게, 정보 전달에 집중해서 읽어줘.',
+  '속독':     '또렷하고 압축적인 리듬으로, 군더더기 없이 정보 전달에 집중해서 읽어줘.',
 };
 
 function downloadBlob(blob, filename) {
@@ -639,11 +639,11 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '다음 원문을 한국어 TTS 발화 스크립트로 변환하세요. (규칙 버전: v3 / OpenAI TTS 최적화)',
     '',
     '=== 출력 원칙 ===',
-    'R1. 출력 형식: 낭독용 평문만 허용한다.',
+    'R1. 출력 허용 형식은 다음 셋뿐이다: ## 섹션 제목 / 일반 문단 / 빈 줄.',
     '  제거: Markdown 장식, HTML 태그, 코드 블록, JSON/XML/SQL, URL 원문, 표 구조, 인라인 코드',
-    '  유지 가능: ## 섹션 제목, 문단 구분 빈 줄, 쉼표, 마침표, 일부 괄호',
+    '  허용: ## 섹션 제목 (그대로 유지), 문단 구분 빈 줄, 쉼표, 마침표, 일부 괄호',
     '',
-    'R2. 섹션 유지: ## 제목 형식은 유지한다. (TTS chunk 경계 / 문맥 전환 / prosody 안정화)',
+    'R2. 섹션 유지: ## 제목 형식은 반드시 유지한다. (TTS chunk 경계 / 문맥 전환 / prosody 안정화)',
     '',
     '=== 문장 규칙 ===',
     'R3. 문장 길이: 권장 70~110자, 최대 140자. 쉼표 3개 초과·숫자 다수·목록 포함 시 분리한다.',
@@ -660,7 +660,7 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     'R7. Numbered List 변환: 1. → 첫째는, 2. → 둘째는, 3. → 셋째는 형태로 변환한다.',
     '',
     '=== 숫자 규칙 ===',
-    'R8. 숫자 읽기 정책:',
+    'R8. 숫자 읽기 정책 (R9 식별자가 아닐 때만 적용):',
     '  일반 수 152 → 백오십이',
     '  천 단위 12,500 → 만 이천오백',
     '  소수 3.14 → 삼 점 일사',
@@ -668,7 +668,7 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '  범위 3~5 → 삼에서 오',
     '  날짜 5/23 → 오월 이십삼일',
     '',
-    'R9. 원문 유지 대상 (변환 금지): 모델명(GPT-5), 버전(v2.1.3), 코드값(A-102), 전화번호(010-1234), IP 주소(192.168.0.1), 이메일(user@test.com)',
+    'R9. 원문 유지 대상 (R8보다 우선 적용 / 변환 금지): 모델명(GPT-5), 버전(v2.1.3), 코드값(A-102), 전화번호(010-1234), IP 주소(192.168.0.1), 이메일(user@test.com)',
     '',
     '=== 기호 규칙 ===',
     'R10. 수식 기호: + → 더하기, - → 빼기, × → 곱하기, ÷ → 나누기, = → 같습니다.',
@@ -716,6 +716,8 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     },
     body: JSON.stringify({
       model: STRUCT_MODEL,
+      store: false,
+      reasoning_effort: 'low',
       messages: [
         { role: 'system', content: systemText },
         { role: 'user',   content: userText }

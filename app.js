@@ -2356,6 +2356,7 @@ function setTransformingUi(isTransforming) {
     elements.btnGenerateMd.innerHTML = '<i data-lucide="sparkles"></i> 파일 분석 및 플레이리스트 생성';
     if (window.lucide) window.lucide.createIcons();
   }
+  updateWakeLock();
 }
 
 function renderPreview(htmlContent, segments) {
@@ -2550,8 +2551,6 @@ function setupQueueListeners() {
   queue.addEventListener('statusChange', (status) => {
     elements.statusBadge.className = `status-badge ${status}`;
 
-    const isActive = ['playing', 'generating', 'buffering'].includes(status);
-
     if (status === 'playing') {
       elements.btnPlayPause.classList.add('playing');
       elements.btnPlayPause.innerHTML = '<i data-lucide="pause"></i>';
@@ -2564,12 +2563,8 @@ function setupQueueListeners() {
       }
     }
 
-    // WakeLock — 재생 중 화면 꺼짐 방지
-    if (isActive) {
-      acquireWakeLock();
-    } else {
-      releaseWakeLock();
-    }
+    // WakeLock — 변환/생성/버퍼링/재생 중 화면 꺼짐 방지
+    updateWakeLock();
 
     // Status text details
     let label = '대기';
@@ -2608,14 +2603,9 @@ function setupQueueListeners() {
     const activeEl = document.getElementById(`segment-${segment.id}`);
     if (activeEl && elements.previewPanel) {
       activeEl.classList.add('active-speech');
-      const panelRect = elements.previewPanel.getBoundingClientRect();
-      const elRect = activeEl.getBoundingClientRect();
-      const headerHeight = elements.previewPanel.querySelector('.preview-header-row')?.offsetHeight ?? 0;
-      const padding = 12;
-      const targetScrollTop = elements.previewPanel.scrollTop
-        + (elRect.top - panelRect.top)
-        - headerHeight - padding;
-      elements.previewPanel.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
+      if (!elements.previewBody.classList.contains('hidden')) {
+        scrollActivePreviewBlock(activeEl);
+      }
     }
     
     // 3. Highlight item in Playlist View
@@ -2683,6 +2673,25 @@ function formatTime(secs) {
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
   return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
+function scrollActivePreviewBlock(activeEl) {
+  const isMobileViewport = window.matchMedia('(max-width: 720px)').matches;
+  if (isMobileViewport) {
+    const topOffset = (window.visualViewport?.offsetTop ?? 0) + 12;
+    const targetTop = activeEl.getBoundingClientRect().top + window.scrollY - topOffset;
+    window.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+    return;
+  }
+
+  const panelRect = elements.previewPanel.getBoundingClientRect();
+  const elRect = activeEl.getBoundingClientRect();
+  const headerHeight = elements.previewPanel.querySelector('.preview-header-row')?.offsetHeight ?? 0;
+  const padding = 12;
+  const targetScrollTop = elements.previewPanel.scrollTop
+    + (elRect.top - panelRect.top)
+    - headerHeight - padding;
+  elements.previewPanel.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
 }
 
 function showNotification(message, type = 'error', onRetry = null) {
@@ -2843,19 +2852,152 @@ function startVisualizer() {
 
 // ── Screen Wake Lock ──────────────────────────────────────────────────────────
 let wakeLockSentinel = null;
+let wakeLockDesired = false;
+let wakeLockRequestInFlight = false;
+let wakeFallbackVideo = null;
+let wakeFallbackCanvas = null;
+let wakeFallbackPaint = null;
+let wakeFallbackTimer = null;
+let silentWakeSource = null;
+let silentWakeGain = null;
+
+function shouldKeepScreenAwake() {
+  return state.isTransforming || ['playing', 'generating', 'buffering'].includes(queue.status);
+}
+
+function ensureWakeFallbackVideo() {
+  if (wakeFallbackVideo) return wakeFallbackVideo;
+  if (!HTMLCanvasElement.prototype.captureStream) return null;
+
+  const video = document.createElement('video');
+  video.muted = true;
+  video.loop = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  video.setAttribute('playsinline', '');
+  video.setAttribute('webkit-playsinline', '');
+  video.setAttribute('aria-hidden', 'true');
+  video.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+  if ('disablePictureInPicture' in video) video.disablePictureInPicture = true;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 2;
+  const ctx = canvas.getContext('2d');
+  let toggle = false;
+  const paint = () => {
+    if (!ctx) return;
+    toggle = !toggle;
+    ctx.fillStyle = toggle ? '#000' : '#111';
+    ctx.fillRect(0, 0, 2, 2);
+  };
+  paint();
+
+  video.srcObject = canvas.captureStream(1);
+  document.body.appendChild(video);
+  wakeFallbackVideo = video;
+  wakeFallbackCanvas = canvas;
+  wakeFallbackPaint = paint;
+  return wakeFallbackVideo;
+}
+
+function startSilentWakeAudio() {
+  if (silentWakeSource) return;
+  try {
+    queue.initAudio();
+    if (!queue.audioCtx) return;
+    silentWakeGain = queue.audioCtx.createGain();
+    silentWakeGain.gain.setValueAtTime(0.000001, queue.audioCtx.currentTime);
+    silentWakeSource = queue.audioCtx.createOscillator();
+    silentWakeSource.frequency.setValueAtTime(20, queue.audioCtx.currentTime);
+    silentWakeSource.connect(silentWakeGain);
+    silentWakeGain.connect(queue.audioCtx.destination);
+    silentWakeSource.start();
+  } catch {
+    silentWakeSource = null;
+    silentWakeGain = null;
+  }
+}
+
+function stopSilentWakeAudio() {
+  if (silentWakeSource) {
+    try { silentWakeSource.stop(); } catch {}
+    try { silentWakeSource.disconnect(); } catch {}
+    silentWakeSource = null;
+  }
+  if (silentWakeGain) {
+    try { silentWakeGain.disconnect(); } catch {}
+    silentWakeGain = null;
+  }
+}
+
+function startWakeFallback() {
+  const video = ensureWakeFallbackVideo();
+  if (wakeFallbackPaint && !wakeFallbackTimer) {
+    wakeFallbackPaint();
+    wakeFallbackTimer = setInterval(wakeFallbackPaint, 1000);
+  }
+  if (video && video.paused) {
+    video.play().catch(() => {});
+  }
+  startSilentWakeAudio();
+}
+
+function stopWakeFallback() {
+  if (wakeFallbackVideo && !wakeFallbackVideo.paused) {
+    wakeFallbackVideo.pause();
+  }
+  if (wakeFallbackTimer) {
+    clearInterval(wakeFallbackTimer);
+    wakeFallbackTimer = null;
+  }
+  stopSilentWakeAudio();
+}
 
 async function acquireWakeLock() {
+  wakeLockDesired = true;
+  if (document.visibilityState !== 'visible') return;
+
+  startWakeFallback();
+
   if (!('wakeLock' in navigator)) return;
   if (wakeLockSentinel && !wakeLockSentinel.released) return;
+  if (wakeLockRequestInFlight) return;
+
   try {
+    wakeLockRequestInFlight = true;
     wakeLockSentinel = await navigator.wakeLock.request('screen');
-  } catch { /* 권한 거부 또는 미지원 — 무시 */ }
+    wakeLockSentinel.addEventListener('release', () => {
+      wakeLockSentinel = null;
+      if (wakeLockDesired && document.visibilityState === 'visible') {
+        setTimeout(acquireWakeLock, 250);
+      }
+    }, { once: true });
+  } catch {
+    // iOS standalone/PWA and low-power states can reject native Wake Lock.
+    // The media fallback above still gives us the best browser-only chance.
+  } finally {
+    wakeLockRequestInFlight = false;
+  }
 }
 
 function releaseWakeLock() {
+  wakeLockDesired = false;
+  stopWakeFallback();
   if (wakeLockSentinel && !wakeLockSentinel.released) {
-    wakeLockSentinel.release();
+    const sentinel = wakeLockSentinel;
     wakeLockSentinel = null;
+    sentinel.release().catch(() => {});
+  } else {
+    wakeLockSentinel = null;
+  }
+}
+
+function updateWakeLock() {
+  if (shouldKeepScreenAwake()) {
+    acquireWakeLock();
+  } else {
+    releaseWakeLock();
   }
 }
 
@@ -2865,12 +3007,10 @@ document.addEventListener('visibilitychange', () => {
   } else {
     // 화면 복귀 시 AudioContext 재개 (화면 잠금 후 복귀 대응)
     if (queue.audioCtx?.state === 'suspended') {
-      queue.audioCtx.resume();
+      queue.audioCtx.resume().catch(() => {});
     }
-    // WakeLock은 화면 꺼짐 시 자동 해제되므로 재생 중이면 재취득
-    if (queue.status === 'playing' || queue.status === 'generating' || queue.status === 'buffering') {
-      acquireWakeLock();
-    }
+    // WakeLock은 화면 꺼짐 시 자동 해제되므로 활성 작업이 있으면 재취득
+    updateWakeLock();
     if (!visualizerAnimationId) startVisualizer();
   }
 });
@@ -2891,7 +3031,8 @@ if ('mediaSession' in navigator) {
 
 // AudioContext는 사용자 제스처 없이 suspended될 수 있음 — 재개 보장
 document.addEventListener('click', () => {
-  if (queue.audioCtx?.state === 'suspended') queue.audioCtx.resume();
+  if (queue.audioCtx?.state === 'suspended') queue.audioCtx.resume().catch(() => {});
+  if (wakeLockDesired && shouldKeepScreenAwake()) acquireWakeLock();
 }, { once: false, passive: true });
 
 window.addEventListener('pagehide', stopVisualizer);

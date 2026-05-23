@@ -1309,6 +1309,7 @@ header {
   .preview-title { flex: 1 1 100%; }
   .main-grid { gap: 14px; }
   .input-panel, .preview-panel, .player-dashboard, .visualizer-container { padding: 16px; border-radius: var(--radius-lg); }
+  .preview-panel { overflow-y: visible; }
   .tab-btn { min-height: 42px; font-size: 12px; gap: 6px; }
   .upload-zone { min-height: 220px; padding: 28px 16px; }
   .display-panel { min-height: 0; gap: 14px; }
@@ -1356,4 +1357,3 @@ header {
   border: 1px solid var(--border-color, rgba(255,255,255,0.1));
   letter-spacing: 0.02em;
 }
-

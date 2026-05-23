@@ -1723,8 +1723,7 @@ const elements = {
   statusBadge: document.getElementById('status-badge'),
   statusText: document.getElementById('status-text'),
   segmentCounter: document.getElementById('segment-counter'),
-  nowPlayingBar: document.getElementById('now-playing-bar'),
-  nowPlayingText: document.getElementById('npb-text'),
+  previewPanel: document.querySelector('.preview-panel'),
   
   btnPrev: document.getElementById('btn-prev'),
   btnPlayPause: document.getElementById('btn-play-pause'),
@@ -2543,9 +2542,6 @@ function setupQueueListeners() {
       }
     }
 
-    // Now-playing bar 표시/숨김
-    elements.nowPlayingBar.classList.toggle('visible', isActive);
-
     // WakeLock — 재생 중 화면 꺼짐 방지
     if (isActive) {
       acquireWakeLock();
@@ -2568,9 +2564,7 @@ function setupQueueListeners() {
   queue.addEventListener('segmentStart', (index) => {
     elements.segmentCounter.textContent = `청크 ${index + 1} / ${state.segments.length}`;
 
-    // Now-playing bar 텍스트 업데이트
     const seg = state.segments[index];
-    if (seg?.text) elements.nowPlayingText.textContent = seg.text;
 
     if ('mediaSession' in navigator) {
       navigator.mediaSession.metadata = new MediaMetadata({
@@ -2588,11 +2582,18 @@ function setupQueueListeners() {
       el.classList.remove('active-speech', 'active', 'playing', 'generating');
     });
     
-    // 2. Highlight element in Previewer
+    // 2. Highlight element in Previewer — 활성 문장을 프리뷰어 상단으로 스크롤
     const activeEl = document.getElementById(`segment-${segment.id}`);
-    if (activeEl) {
+    if (activeEl && elements.previewPanel) {
       activeEl.classList.add('active-speech');
-      activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const panelRect = elements.previewPanel.getBoundingClientRect();
+      const elRect = activeEl.getBoundingClientRect();
+      const headerHeight = elements.previewPanel.querySelector('.preview-header-row')?.offsetHeight ?? 0;
+      const padding = 12;
+      const targetScrollTop = elements.previewPanel.scrollTop
+        + (elRect.top - panelRect.top)
+        - headerHeight - padding;
+      elements.previewPanel.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
     }
     
     // 3. Highlight item in Playlist View

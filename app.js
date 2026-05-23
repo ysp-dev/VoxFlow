@@ -164,6 +164,49 @@ const STRUCT_MODEL = 'gpt-5-mini';
 const TTS_MAX_RETRIES = 2;
 const STRUCT_MAX_RETRIES = 3;
 const MAX_TTS_CHARS = 500;
+
+/* ==========================================================================
+   TTS Audio Cache — IndexedDB
+   ========================================================================== */
+
+const IDB_NAME  = 'voxflow-tts-cache';
+const IDB_STORE = 'audio';
+
+function openTtsCacheDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = (e) => e.target.result.createObjectStore(IDB_STORE);
+    req.onsuccess  = (e) => resolve(e.target.result);
+    req.onerror    = ()  => reject(req.error);
+  });
+}
+
+async function getCachedAudio(key) {
+  try {
+    const db = await openTtsCacheDb();
+    return await new Promise((resolve) => {
+      const req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
+      req.onsuccess = () => resolve(req.result ?? null);
+      req.onerror   = () => resolve(null);
+    });
+  } catch { return null; }
+}
+
+async function setCachedAudio(key, arrayBuffer) {
+  try {
+    const db = await openTtsCacheDb();
+    await new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(arrayBuffer, key);
+      tx.oncomplete = resolve;
+      tx.onerror    = resolve; // 실패해도 조용히 무시
+    });
+  } catch { /* 캐시 저장 실패는 무시 */ }
+}
+
+function makeTtsCacheKey(text, voice, styleHint) {
+  return `${voice}||${styleHint}||${text}`;
+}
 const MAX_READY_AUDIO_BUFFERS = 12;
 
 function sleep(ms, signal = null) {
@@ -574,6 +617,12 @@ async function generateSpeech(text, { apiKey, voice = 'marin', styleHint = '', s
   }
 
   const cleanText = stripTtsMarkers(text);
+
+  // 캐시 조회 — 히트 시 API 호출 없이 즉시 반환
+  const cacheKey = makeTtsCacheKey(cleanText, voice, styleHint);
+  const cached = await getCachedAudio(cacheKey);
+  if (cached) return { arrayBuffer: cached, fromCache: true };
+
   const payload = { model: TTS_MODEL, input: cleanText, voice, response_format: 'mp3' };
   if (styleHint) payload.instructions = styleHint;
 
@@ -598,7 +647,9 @@ async function generateSpeech(text, { apiKey, voice = 'marin', styleHint = '', s
         throw error;
       }
 
-      return { arrayBuffer: await response.arrayBuffer() };
+      const arrayBuffer = await response.arrayBuffer();
+      setCachedAudio(cacheKey, arrayBuffer); // 백그라운드 저장, await 불필요
+      return { arrayBuffer };
     } catch (error) {
       if (error.name === 'AbortError') throw error;
       lastError = error;

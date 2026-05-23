@@ -1622,6 +1622,7 @@ function handleFileImport(file) {
     if (state.currentFile !== fileToken) return;
     state.currentFile.content = e.target.result;
     elements.btnGenerateMd.classList.remove('hidden');
+    showRawPreview(e.target.result);
     if (window.lucide) window.lucide.createIcons();
   };
   reader.onerror = () => {
@@ -1631,6 +1632,18 @@ function handleFileImport(file) {
     showNotification('파일을 읽는 중 오류가 발생했습니다.');
   };
   reader.readAsText(file);
+}
+
+function showRawPreview(content) {
+  const html = window.marked
+    ? sanitizeHtmlFragment(window.marked.parse(content))
+    : `<pre style="white-space:pre-wrap;word-break:break-word;font-size:13px;">${content.replace(/</g, '&lt;')}</pre>`;
+  elements.previewTitle.innerHTML = '<i data-lucide="book-open"></i> 원문 미리보기';
+  elements.btnToggleView.classList.add('hidden');
+  elements.previewBody.innerHTML = html;
+  elements.previewBody.classList.remove('hidden');
+  elements.playlistContainer.classList.add('hidden');
+  if (window.lucide) window.lucide.createIcons();
 }
 
 function formatBytes(bytes, decimals = 2) {
@@ -1816,6 +1829,7 @@ function setTransformingUi(isTransforming) {
     }
     if (window.lucide) window.lucide.createIcons();
 
+    elements.previewTitle.innerHTML = '<i data-lucide="book-open"></i> 스마트 프리뷰어';
     elements.previewBody.classList.remove('hidden');
     elements.playlistContainer.classList.add('hidden');
     elements.previewBody.innerHTML = `

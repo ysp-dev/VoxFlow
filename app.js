@@ -2675,10 +2675,23 @@ function formatTime(secs) {
   return `${m}:${s < 10 ? '0' : ''}${s}`;
 }
 
+let safeAreaTopProbe = null;
+
+function getSafeAreaInsetTop() {
+  if (!safeAreaTopProbe) {
+    safeAreaTopProbe = document.createElement('div');
+    safeAreaTopProbe.style.cssText = 'position:fixed;top:env(safe-area-inset-top, 0px);left:0;width:0;height:0;visibility:hidden;pointer-events:none;';
+    document.body.appendChild(safeAreaTopProbe);
+  }
+  return parseFloat(getComputedStyle(safeAreaTopProbe).top) || 0;
+}
+
 function scrollActivePreviewBlock(activeEl) {
   const isMobileViewport = window.matchMedia('(max-width: 720px)').matches;
   if (isMobileViewport) {
-    const topOffset = (window.visualViewport?.offsetTop ?? 0) + 12;
+    const safeTop = getSafeAreaInsetTop();
+    const viewportTop = window.visualViewport?.offsetTop ?? 0;
+    const topOffset = Math.max(24, viewportTop + safeTop + 14);
     const targetTop = activeEl.getBoundingClientRect().top + window.scrollY - topOffset;
     window.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
     return;

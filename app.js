@@ -1676,6 +1676,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTextareaCounter();
   refreshCacheCount();
   updateRepeatButton();
+  setupPullToRefresh();
 
   elements.btnSourceToggle.addEventListener('click', () => {
     if (currentViewMode === 'raw') {
@@ -2025,6 +2026,48 @@ function formatBytes(bytes, decimals = 2) {
 /* ==========================================================================
    Textarea Characters Counting
    ========================================================================== */
+
+function setupPullToRefresh() {
+  const indicator = document.getElementById('ptr-indicator');
+  if (!indicator || !('ontouchstart' in window)) return;
+
+  const THRESHOLD = 72;
+  const HEIGHT    = 56;
+  let startY      = 0;
+  let isPulling   = false;
+
+  document.addEventListener('touchstart', (e) => {
+    if (window.scrollY !== 0) return;
+    startY    = e.touches[0].clientY;
+    isPulling = true;
+    indicator.style.transition = 'none';
+  }, { passive: true });
+
+  document.addEventListener('touchmove', (e) => {
+    if (!isPulling) return;
+    const delta = e.touches[0].clientY - startY;
+    if (delta <= 0) { isPulling = false; return; }
+    const shown = Math.min(delta / THRESHOLD * HEIGHT, HEIGHT + 10);
+    indicator.style.transform = `translateY(calc(-100% + ${shown}px))`;
+    indicator.classList.toggle('ready', delta >= THRESHOLD);
+  }, { passive: true });
+
+  document.addEventListener('touchend', (e) => {
+    if (!isPulling) return;
+    isPulling = false;
+    const delta = e.changedTouches[0].clientY - startY;
+    indicator.style.transition = 'transform 0.25s ease';
+    if (delta >= THRESHOLD) {
+      indicator.style.transform = 'translateY(0)';
+      indicator.classList.remove('ready');
+      indicator.classList.add('refreshing');
+      setTimeout(() => location.reload(), 600);
+    } else {
+      indicator.style.transform = 'translateY(-100%)';
+      indicator.classList.remove('ready');
+    }
+  }, { passive: true });
+}
 
 function setupTextareaCounter() {
   elements.textareaInput.addEventListener('input', () => {

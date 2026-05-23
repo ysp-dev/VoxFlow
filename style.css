@@ -51,6 +51,43 @@ body {
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
+  overscroll-behavior-y: contain;
+}
+
+/* Pull-to-refresh indicator */
+.ptr-indicator {
+  position: fixed;
+  top: env(safe-area-inset-top, 0px);
+  left: 0;
+  right: 0;
+  height: 56px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transform: translateY(-100%);
+  z-index: 9998;
+  pointer-events: none;
+}
+
+.ptr-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg-base);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+  transition: transform 0.2s ease;
+}
+
+.ptr-indicator.ready .ptr-icon {
+  transform: rotate(180deg);
+}
+
+.ptr-indicator.refreshing .ptr-icon svg {
+  animation: spin 0.7s linear infinite;
 }
 
 /* Scrollbar Customization */

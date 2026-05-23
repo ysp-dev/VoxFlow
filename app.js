@@ -282,6 +282,35 @@ const ENGLISH_PRONUNCIATION_OVERRIDES = {
   push: '푸시'
 };
 
+const ACRONYM_LETTER_PRONUNCIATIONS = {
+  A: '에이',
+  B: '비',
+  C: '씨',
+  D: '디',
+  E: '이',
+  F: '에프',
+  G: '지',
+  H: '에이치',
+  I: '아이',
+  J: '제이',
+  K: '케이',
+  L: '엘',
+  M: '엠',
+  N: '엔',
+  O: '오',
+  P: '피',
+  Q: '큐',
+  R: '알',
+  S: '에스',
+  T: '티',
+  U: '유',
+  V: '브이',
+  W: '더블유',
+  X: '엑스',
+  Y: '와이',
+  Z: '제트'
+};
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a   = document.createElement('a');
@@ -722,6 +751,8 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '',
     'R14. 영문 단어/제품명/조직명은 가능한 한 한글 발음 또는 한국어 설명으로 변환하고, 필요한 경우 바로 뒤에 영문 원문을 괄호로 병기한다.',
     '  원문에 영문자가 하나라도 들어간 단어, 약어, 제품명, 함수명, 필드명, 명령어, 파일명은 모두 괄호로 원문을 보존한다.',
+    '  대문자 약어는 한국어 알파벳 명칭으로 읽는다. A=에이, C=씨, I=아이, L=엘, M=엠, O=오, R=알, S=에스, U=유. R은 아르가 아니라 알이다.',
+    '  예: LCR → 엘씨알(LCR), URL → 유알엘(URL), SQL → 에스큐엘(SQL), CPU → 씨피유(CPU), CRM → 씨알엠(CRM).',
     '  한국어 표기는 철자식이 아니라 실제 영어 발음·국내 IT 관용 표기를 따른다. call은 칼이 아니라 콜(call), callback은 콜백(callback), cache는 캐시(cache), token은 토큰(token), prompt는 프롬프트(prompt)로 쓴다.',
     '  모호하면 국립국어원 외래어 표기법의 영어 발음 표기 원칙과 국내 기술문서 관용 표기를 우선한다.',
     '  긴 영문 문장은 한국어 설명형으로 변환하며, 원문 전체를 길게 괄호 병기하지 않는다.',
@@ -798,9 +829,15 @@ function stripTtsMarkers(text) {
     .trim();
 }
 
+function getAcronymPronunciation(value) {
+  const token = String(value || '').trim();
+  if (!/^[A-Z]{1,10}$/.test(token)) return '';
+  return token.split('').map(letter => ACRONYM_LETTER_PRONUNCIATIONS[letter] || letter).join('');
+}
+
 function normalizeEnglishPronunciationParentheticals(text) {
   return String(text || '').replace(/([가-힣]+)\s*[\(（]\s*([A-Za-z][A-Za-z0-9_-]*)\s*[\)）]/g, (match, hangul, english) => {
-    const preferred = ENGLISH_PRONUNCIATION_OVERRIDES[english.toLowerCase()];
+    const preferred = getAcronymPronunciation(english) || ENGLISH_PRONUNCIATION_OVERRIDES[english.toLowerCase()];
     if (!preferred) return match;
     return `${preferred}(${english})`;
   });

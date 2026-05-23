@@ -466,18 +466,11 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
     '14. 영문 전체 문장이 본문에 포함된 경우, 해당 언어 그대로 유지하거나 한국어 번역을 병기한다.',
     '15. 고유명사(브랜드, 제품명, 인명)는 원문을 유지한다.',
     '',
-    'TTS 인라인 마커 삽입 규칙',
-    '16. 섹션 전환 시 첫 문장 앞에 [pause]를 삽입한다.',
-    '17. 핵심어·강조 단어 앞에 [emphasis]를 삽입한다.',
-    '18. 경고·주의·예외 사항 문장 앞에 [cautious]를 삽입한다.',
-    '19. 질문 형식 문장 뒤에는 [pause]를 삽입한다.',
-    '',
     '추가 규칙',
-    '20. 문장 연결성 확보: 60자 제한으로 문장을 나눌 때, 무조건 완결형 어미만 쓰기보다는 문맥에 따라 \'~하며,\', \'~하고,\' 같은 연결 어미를 적절히 섞어 자연스러운 대화체 리듬을 살린다. 단, TTS 호흡이 너무 길어지지 않도록 한 문장 안에서 연결 어미는 최대 1회만 허용한다.',
+    '16. 문장 연결성 확보: 60자 제한으로 문장을 나눌 때, 무조건 완결형 어미만 쓰기보다는 문맥에 따라 \'~하며,\', \'~하고,\' 같은 연결 어미를 적절히 섞어 자연스러운 대화체 리듬을 살린다. 단, TTS 호흡이 너무 길어지지 않도록 한 문장 안에서 연결 어미는 최대 1회만 허용한다.',
     '   나쁜 예시 (너무 단조로움): "A 시스템을 도입합니다. 그리고 데이터를 분석합니다. 효율성이 높아집니다." (X)',
     '   좋은 예시 (자연스러운 리듬): "A 시스템을 도입하여 데이터를 분석하면, 업무 효율성을 크게 높일 수 있습니다." (O)',
-    '21. 범위 기호 처리: 물결표(~)는 문맥에 따라 "에서", "부터", "까지" 등의 명확한 한글 조사로 풀어 쓴다.',
-    '22. 마커 남발 방지: [emphasis]와 [cautious]는 텍스트 전체의 핵심 주제에만 보수적으로 적용하며, 한 단락에 2회를 초과하지 않는다.'
+    '17. 범위 기호 처리: 물결표(~)는 문맥에 따라 "에서", "부터", "까지" 등의 명확한 한글 조사로 풀어 쓴다.'
   ].join('\n');
 
   const contextNote = prevTail
@@ -522,12 +515,22 @@ async function transformSingleChunk(rawText, { apiKey, signal = null, prevTail =
   return transformed;
 }
 
+function stripTtsMarkers(text) {
+  return text
+    .replace(/\[pause\]/gi, '')
+    .replace(/\[emphasis\]/gi, '')
+    .replace(/\[cautious\]/gi, '')
+    .replace(/  +/g, ' ')
+    .trim();
+}
+
 async function generateSpeech(text, { apiKey, voice = 'alloy', styleHint = '', signal = null }) {
   if (!apiKey || apiKey.trim() === '') {
     throw new Error('OpenAI API Key가 누락되었습니다. 상단 설정 바에서 API Key를 입력해주세요.');
   }
 
-  const payload = { model: TTS_MODEL, input: text, voice, response_format: 'mp3' };
+  const cleanText = stripTtsMarkers(text);
+  const payload = { model: TTS_MODEL, input: cleanText, voice, response_format: 'mp3' };
   if (styleHint) payload.instructions = styleHint;
 
   const retryableStatuses = new Set([429, 500, 502, 503, 504]);
@@ -1033,6 +1036,7 @@ class QueueManager {
     }
 
     this.pausedAt = 0;
+    this.currentIndex = 0;
     this.stopProgressTracking();
     this.emit('progress', 0, 1);
   }

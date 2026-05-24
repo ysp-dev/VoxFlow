@@ -655,6 +655,9 @@ header {
 /* Auto-play toggle */
 .autoplay-row {
   margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
 }
 
 .autoplay-label {

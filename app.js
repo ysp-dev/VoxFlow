@@ -540,6 +540,7 @@ function updateExportRowVisibility() {
 
 const MAX_READY_AUDIO_BUFFERS = 12;
 const PREFETCH_SEGMENT_COUNT = 4;
+const STABLE_PLAYBACK_STORAGE_KEY = 'voxflow_stable_playback';
 
 function sleep(ms, signal = null) {
   return new Promise((resolve, reject) => {
@@ -1405,6 +1406,66 @@ function parseMarkdown(markdownText) {
   return { html: temp.innerHTML, segments };
 }
 
+function writeAsciiString(view, offset, value) {
+  for (let i = 0; i < value.length; i++) {
+    view.setUint8(offset + i, value.charCodeAt(i));
+  }
+}
+
+function createWavBlobFromAudioBuffers(audioBuffers) {
+  if (!audioBuffers.length) {
+    throw new Error('연속 재생용 오디오가 없습니다.');
+  }
+
+  const sampleRate = audioBuffers[0].sampleRate;
+  const numberOfChannels = Math.max(...audioBuffers.map(buffer => buffer.numberOfChannels || 1));
+  const bytesPerSample = 2;
+  const segmentStarts = [];
+  const totalFrames = audioBuffers.reduce((sum, buffer) => {
+    segmentStarts.push(sum / sampleRate);
+    return sum + buffer.length;
+  }, 0);
+  const dataSize = totalFrames * numberOfChannels * bytesPerSample;
+  const wavBuffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(wavBuffer);
+
+  writeAsciiString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeAsciiString(view, 8, 'WAVE');
+  writeAsciiString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numberOfChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numberOfChannels * bytesPerSample, true);
+  view.setUint16(32, numberOfChannels * bytesPerSample, true);
+  view.setUint16(34, bytesPerSample * 8, true);
+  writeAsciiString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  let writeOffset = 44;
+  for (const buffer of audioBuffers) {
+    const channelData = Array.from({ length: numberOfChannels }, (_, channel) => {
+      const sourceChannel = Math.min(channel, buffer.numberOfChannels - 1);
+      return buffer.getChannelData(sourceChannel);
+    });
+
+    for (let frame = 0; frame < buffer.length; frame++) {
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const sample = Math.max(-1, Math.min(1, channelData[channel][frame] || 0));
+        view.setInt16(writeOffset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        writeOffset += bytesPerSample;
+      }
+    }
+  }
+
+  return {
+    blob: new Blob([wavBuffer], { type: 'audio/wav' }),
+    segmentStarts,
+    duration: totalFrames / sampleRate
+  };
+}
+
 /**
  * ==========================================================================
  * AetherTTS - Web Audio API & Playback Queue Manager Module
@@ -1439,6 +1500,12 @@ class QueueManager {
     this.nextScheduledTime = 0;
     this.preScheduledSource = null;
     this.preScheduledIndex = -1;
+    this.useStablePlayback = false;
+    this.mediaAudio = null;
+    this.mediaObjectUrl = null;
+    this.mediaSegmentStarts = [];
+    this.mediaDuration = 0;
+    this.mediaActiveIndex = -1;
 
     // API configuration for prefetching
     this.apiConfig = {
@@ -1540,6 +1607,13 @@ class QueueManager {
     this.apiConfig = { ...this.apiConfig, ...config };
   }
 
+  setStablePlayback(enabled) {
+    const nextValue = Boolean(enabled);
+    if (this.useStablePlayback === nextValue) return;
+    this.stop();
+    this.useStablePlayback = nextValue;
+  }
+
   releaseDistantAudioBuffers(centerIndex = this.currentIndex) {
     const readySegments = this.segments
       .filter(seg => seg.audioBuffer)
@@ -1561,6 +1635,9 @@ class QueueManager {
     if (this.gainNode) {
       this.gainNode.gain.setValueAtTime(this.volume, this.audioCtx.currentTime);
     }
+    if (this.mediaAudio) {
+      this.mediaAudio.volume = this.volume;
+    }
   }
 
   /**
@@ -1575,6 +1652,9 @@ class QueueManager {
       this.currentSourceNode.playbackRate.setValueAtTime(newRate, this.audioCtx.currentTime);
     }
     this.playbackRate = newRate;
+    if (this.mediaAudio) {
+      this.mediaAudio.playbackRate = newRate;
+    }
   }
 
   /**
@@ -1584,6 +1664,11 @@ class QueueManager {
     this.initAudio();
     
     if (this.segments.length === 0) return;
+
+    if (this.useStablePlayback) {
+      await this.playStable();
+      return;
+    }
     
     this.isPlaying = true;
     
@@ -1603,6 +1688,19 @@ class QueueManager {
    */
   pause() {
     if (!this.isPlaying) return;
+
+    if (this.useStablePlayback) {
+      if (!this.mediaAudio) {
+        this.stop();
+        return;
+      }
+      this.isPlaying = false;
+      this.setStatus('paused');
+      this.mediaAudio.pause();
+      this.pausedAt = Math.max(0, this.mediaAudio.currentTime - (this.mediaSegmentStarts[this.currentIndex] || 0));
+      this.stopProgressTracking();
+      return;
+    }
 
     this.isPlaying = false;
     this.setStatus('paused');
@@ -1626,6 +1724,7 @@ class QueueManager {
     this.setStatus('idle');
     this._clearPreScheduled();
     this.nextScheduledTime = 0;
+    this._destroyStableMedia();
 
     if (this.generationAbortController) {
       this.generationAbortController.abort();
@@ -1667,11 +1766,132 @@ class QueueManager {
    */
   jumpToSegment(index) {
     if (index < 0 || index >= this.segments.length) return;
+
+    if (this.useStablePlayback && this.mediaAudio) {
+      this.currentIndex = index;
+      this.pausedAt = 0;
+      this.mediaAudio.currentTime = this.mediaSegmentStarts[index] || 0;
+      this.emit('segmentStart', index);
+      this.emit('progress', this.mediaAudio.currentTime, this.mediaDuration || this.mediaAudio.duration || 1);
+      if (this.isPlaying) {
+        this.mediaAudio.play().catch(() => {});
+        this.setStatus('playing');
+        this.startStableProgressTracking();
+      }
+      return;
+    }
+
+    if (this.useStablePlayback) {
+      this.stop();
+      this.currentIndex = index;
+      this.isPlaying = true;
+      this.playStable();
+      return;
+    }
     
     this.stop();
     this.currentIndex = index;
     this.isPlaying = true;
     this.playSegment(index);
+  }
+
+  async playStable() {
+    if (this.segments.length === 0) return;
+
+    this.isPlaying = true;
+    this._clearPreScheduled();
+
+    if (!this.mediaAudio) {
+      try {
+        await this.prepareStableMedia();
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        this.isPlaying = false;
+        this.setStatus('idle');
+        showNotification(`차량 모드 준비 실패: ${err.message}`, 'error');
+        return;
+      }
+    }
+
+    if (!this.isPlaying || !this.mediaAudio) return;
+
+    if (this.status !== 'paused') {
+      this.mediaAudio.currentTime = this.mediaSegmentStarts[this.currentIndex] || 0;
+    }
+
+    this.mediaAudio.volume = this.volume;
+    this.mediaAudio.playbackRate = this.playbackRate;
+    this.emit('segmentStart', this.currentIndex);
+
+    try {
+      await this.mediaAudio.play();
+      this.setStatus('playing');
+      this.startStableProgressTracking();
+    } catch (err) {
+      this.isPlaying = false;
+      this.setStatus('paused');
+      showNotification('브라우저가 자동 재생을 막았습니다. 재생 버튼을 한 번 더 눌러주세요.', 'warning');
+    }
+  }
+
+  async prepareStableMedia() {
+    if (this.mediaAudio) return;
+
+    this.setStatus('generating');
+    this._destroyStableMedia();
+
+    if (!this.generationAbortController) {
+      this.generationAbortController = new AbortController();
+    }
+
+    const { signal } = this.generationAbortController;
+    const capturedVersion = this.queueVersion;
+    const audioBuffers = [];
+
+    for (let i = 0; i < this.segments.length; i++) {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (this.queueVersion !== capturedVersion) throw new DOMException('Aborted', 'AbortError');
+
+      const segment = this.segments[i];
+      if (!segment.audioBuffer) {
+        segment.state = 'generating';
+        this.emit('stateUpdate', this.segments);
+
+        const result = await generateSpeech(segment.ttsText || segment.text, { ...this.apiConfig, signal });
+        if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        if (this.queueVersion !== capturedVersion) throw new DOMException('Aborted', 'AbortError');
+
+        segment.audioBuffer = await this.decodeAudio(result.arrayBuffer);
+        segment.state = 'ready';
+        segment.errorMsg = null;
+        this.emit('stateUpdate', this.segments);
+      }
+      audioBuffers.push(segment.audioBuffer);
+    }
+
+    this.setStatus('buffering');
+    const { blob, segmentStarts, duration } = createWavBlobFromAudioBuffers(audioBuffers);
+    const audio = new Audio();
+    audio.preload = 'auto';
+    audio.playsInline = true;
+    audio.setAttribute('playsinline', '');
+    audio.setAttribute('webkit-playsinline', '');
+    audio.src = URL.createObjectURL(blob);
+    audio.volume = this.volume;
+    audio.playbackRate = this.playbackRate;
+    audio.addEventListener('ended', () => this._handleStableEnded());
+    audio.addEventListener('error', () => {
+      if (!this.isPlaying) return;
+      this.isPlaying = false;
+      this.setStatus('idle');
+      showNotification('차량 모드 오디오 재생 중 오류가 발생했습니다.', 'error');
+    });
+
+    this.mediaAudio = audio;
+    this.mediaObjectUrl = audio.src;
+    this.mediaSegmentStarts = segmentStarts;
+    this.mediaDuration = duration;
+    this.mediaActiveIndex = -1;
   }
 
   /**
@@ -1813,6 +2033,81 @@ class QueueManager {
         }
       })();
     }
+  }
+
+  _destroyStableMedia() {
+    if (this.mediaAudio) {
+      this.mediaAudio.pause();
+      this.mediaAudio.removeAttribute('src');
+      this.mediaAudio.load();
+      this.mediaAudio = null;
+    }
+    if (this.mediaObjectUrl) {
+      URL.revokeObjectURL(this.mediaObjectUrl);
+      this.mediaObjectUrl = null;
+    }
+    this.mediaSegmentStarts = [];
+    this.mediaDuration = 0;
+    this.mediaActiveIndex = -1;
+  }
+
+  _getStableSegmentIndex(time) {
+    for (let i = this.mediaSegmentStarts.length - 1; i >= 0; i--) {
+      if (time + 0.03 >= this.mediaSegmentStarts[i]) return i;
+    }
+    return 0;
+  }
+
+  _getStableSegmentEnd(index) {
+    return this.mediaSegmentStarts[index + 1] ?? this.mediaDuration;
+  }
+
+  _handleStableEnded() {
+    if (!this.isPlaying) return;
+
+    if (this.repeatMode === 'all') {
+      this.currentIndex = 0;
+      this.pausedAt = 0;
+      this.mediaAudio.currentTime = 0;
+      this.playStable();
+    } else if (this.repeatMode === 'one') {
+      this.mediaAudio.currentTime = this.mediaSegmentStarts[this.currentIndex] || 0;
+      this.playStable();
+    } else {
+      this.stop();
+    }
+  }
+
+  startStableProgressTracking() {
+    this.stopProgressTracking();
+
+    this.progressInterval = setInterval(() => {
+      if (!this.isPlaying || !this.mediaAudio) {
+        this.stopProgressTracking();
+        return;
+      }
+
+      let current = Math.min(this.mediaAudio.currentTime || 0, this.mediaDuration || this.mediaAudio.duration || 1);
+      const duration = this.mediaDuration || this.mediaAudio.duration || 1;
+
+      if (this.repeatMode === 'one') {
+        const start = this.mediaSegmentStarts[this.currentIndex] || 0;
+        const end = this._getStableSegmentEnd(this.currentIndex);
+        if (end > start && current >= end - 0.03) {
+          this.mediaAudio.currentTime = start;
+          current = start;
+        }
+      }
+
+      const activeIndex = this._getStableSegmentIndex(current);
+      if (activeIndex !== this.currentIndex && activeIndex >= 0 && activeIndex < this.segments.length) {
+        this.currentIndex = activeIndex;
+        this.pausedAt = 0;
+        this.emit('segmentStart', activeIndex);
+      }
+
+      this.emit('progress', current, duration);
+    }, 100);
   }
 
   /**
@@ -2048,6 +2343,7 @@ const elements = {
   
   selectVoice: document.getElementById('select-voice'),
   chkAutoplay: document.getElementById('chk-autoplay'),
+  chkStablePlayback: document.getElementById('chk-stable-playback'),
   presetChips: document.querySelectorAll('.chip[data-preset]'),
   btnClearCache: document.getElementById('btn-clear-cache'),
   cacheCountBadge: document.getElementById('cache-count-badge'),
@@ -2507,6 +2803,17 @@ function setupTextareaCounter() {
 
 function setupSettings() {
   state.voice = elements.selectVoice.value;
+  const savedStablePlayback = localStorage.getItem(STABLE_PLAYBACK_STORAGE_KEY);
+  const stablePlaybackEnabled = savedStablePlayback === null ? true : savedStablePlayback === 'true';
+  if (elements.chkStablePlayback) {
+    elements.chkStablePlayback.checked = stablePlaybackEnabled;
+    queue.setStablePlayback(stablePlaybackEnabled);
+    elements.chkStablePlayback.addEventListener('change', () => {
+      const enabled = elements.chkStablePlayback.checked;
+      localStorage.setItem(STABLE_PLAYBACK_STORAGE_KEY, String(enabled));
+      queue.setStablePlayback(enabled);
+    });
+  }
 
   const syncConfig = () => {
     state.voice = elements.selectVoice.value;
@@ -2817,7 +3124,7 @@ function setupPlayerControls() {
       return;
     }
     
-    if (queue.status === 'playing' || queue.status === 'buffering') {
+    if (queue.status === 'playing' || queue.status === 'buffering' || (queue.useStablePlayback && queue.status === 'generating')) {
       queue.pause();
     } else {
       // Flush stale buffers if voice/style changed since last play (e.g. typed style then clicked play)

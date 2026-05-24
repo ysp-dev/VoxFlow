@@ -539,6 +539,7 @@ function updateExportRowVisibility() {
 }
 
 const MAX_READY_AUDIO_BUFFERS = 12;
+const PREFETCH_SEGMENT_COUNT = 4;
 
 function sleep(ms, signal = null) {
   return new Promise((resolve, reject) => {
@@ -1768,17 +1769,19 @@ class QueueManager {
   }
 
   /**
-   * Triggers background prefetching of the next two segments in queue.
+   * Triggers background prefetching of upcoming queue segments.
    */
   async prefetchNext() {
-    const prefetchCount = 2; // Prefetch 2 segments ahead for smoother Bluetooth playback
-    
-    for (let i = 1; i <= prefetchCount; i++) {
+    for (let i = 1; i <= PREFETCH_SEGMENT_COUNT; i++) {
       const nextIndex = this.currentIndex + i;
       if (nextIndex >= this.segments.length) break;
       
       const segment = this.segments[nextIndex];
-      if (segment.state !== 'idle' || segment.audioBuffer) continue;
+      if (segment.audioBuffer) {
+        if (i === 1) this._tryPreSchedule(nextIndex, segment.audioBuffer);
+        continue;
+      }
+      if (segment.state !== 'idle') continue;
       
       // Async background generation trigger
       segment.state = 'generating';
@@ -1845,40 +1848,74 @@ class QueueManager {
     source.playbackRate.setValueAtTime(this.playbackRate, this.audioCtx.currentTime);
     source.connect(this.gainNode);
 
-    const duration = audioBuffer.duration / this.playbackRate;
-    const thisEndTime = this.nextScheduledTime + duration;
-
-    source.onended = () => {
-      if (this.currentSourceNode !== source) return;
-      this.currentSourceNode = null;
-      this.stopProgressTracking();
-      if (!this.isPlaying) return;
-      if (this.currentIndex < this.segments.length - 1) {
-        this.currentIndex++;
-        this.pausedAt = 0;
-        this.nextScheduledTime = thisEndTime;
-        this.emit('segmentStart', this.currentIndex);
-        const nextSeg = this.segments[this.currentIndex];
-        if (nextSeg?.audioBuffer) {
-          this.executePlayback(nextSeg.audioBuffer, 0);
-        } else {
-          this.nextScheduledTime = 0;
-          this.playSegment(this.currentIndex);
-        }
-        this.prefetchNext();
-      } else if (this.repeatMode === 'all') {
-        this.currentIndex = 0;
-        this.pausedAt = 0;
-        this.nextScheduledTime = 0;
-        this.playSegment(0);
-      } else {
-        this.stop();
-      }
-    };
+    source.onended = () => this._handlePlaybackEnded(source);
 
     source.start(this.nextScheduledTime, 0);
     this.preScheduledSource = source;
     this.preScheduledIndex = index;
+  }
+
+  _activatePreScheduledCurrent() {
+    if (this.preScheduledIndex !== this.currentIndex || !this.preScheduledSource) {
+      return false;
+    }
+
+    const scheduledSource = this.preScheduledSource;
+    const segment = this.segments[this.currentIndex];
+    const scheduledStartAt = this.nextScheduledTime;
+
+    this.currentSourceNode = scheduledSource;
+    this.preScheduledSource = null;
+    this.preScheduledIndex = -1;
+
+    if (segment?.audioBuffer) {
+      this.startTime = scheduledStartAt;
+      this.nextScheduledTime = scheduledStartAt + (segment.audioBuffer.duration / this.playbackRate);
+      this.startProgressTracking(segment.audioBuffer.duration);
+    }
+
+    this.prefetchNext();
+    return true;
+  }
+
+  _handlePlaybackEnded(source) {
+    if (this.currentSourceNode !== source) return;
+    this.stopProgressTracking();
+    this.currentSourceNode = null;
+
+    if (!this.isPlaying) return;
+
+    if (this.repeatMode === 'one') {
+      this.pausedAt = 0;
+      this.nextScheduledTime = 0;
+      this._clearPreScheduled();
+      this.playSegment(this.currentIndex);
+    } else if (this.currentIndex < this.segments.length - 1) {
+      this.currentIndex++;
+      this.pausedAt = 0;
+      this.emit('segmentStart', this.currentIndex);
+
+      if (this._activatePreScheduledCurrent()) return;
+
+      this._clearPreScheduled();
+      const nextSeg = this.segments[this.currentIndex];
+      if (nextSeg?.audioBuffer) {
+        this.executePlayback(nextSeg.audioBuffer, 0);
+      } else {
+        this.nextScheduledTime = 0;
+        this.playSegment(this.currentIndex);
+      }
+      this.prefetchNext();
+    } else if (this.repeatMode === 'all') {
+      this.currentIndex = 0;
+      this.pausedAt = 0;
+      this.nextScheduledTime = 0;
+      this._clearPreScheduled();
+      this.playSegment(0);
+    } else {
+      this._clearPreScheduled();
+      this.stop();
+    }
   }
 
   executePlayback(audioBuffer, offset = 0, scheduledStartAt = null) {
@@ -1898,53 +1935,7 @@ class QueueManager {
     const segDuration = (audioBuffer.duration - offset) / this.playbackRate;
     this.nextScheduledTime = startAt + segDuration;
 
-    source.onended = () => {
-      this.stopProgressTracking();
-      if (this.currentSourceNode !== source) return;
-      this.currentSourceNode = null;
-
-      if (!this.isPlaying) return;
-
-      if (this.repeatMode === 'one') {
-        this.pausedAt = 0;
-        this.nextScheduledTime = 0;
-        this._clearPreScheduled();
-        this.playSegment(this.currentIndex);
-      } else if (this.currentIndex < this.segments.length - 1) {
-        this.currentIndex++;
-        this.pausedAt = 0;
-        this.emit('segmentStart', this.currentIndex);
-
-        if (this.preScheduledIndex === this.currentIndex && this.preScheduledSource) {
-          // 이미 pre-scheduled된 노드가 재생 중 — 소유권만 이전
-          this.currentSourceNode = this.preScheduledSource;
-          this.preScheduledSource = null;
-          this.preScheduledIndex = -1;
-          const seg = this.segments[this.currentIndex];
-          if (seg?.audioBuffer) this.startProgressTracking(seg.audioBuffer.duration);
-          this.prefetchNext();
-        } else {
-          this._clearPreScheduled();
-          const nextSeg = this.segments[this.currentIndex];
-          if (nextSeg?.audioBuffer) {
-            this.executePlayback(nextSeg.audioBuffer, 0);
-          } else {
-            this.nextScheduledTime = 0;
-            this.playSegment(this.currentIndex);
-          }
-          this.prefetchNext();
-        }
-      } else if (this.repeatMode === 'all') {
-        this.currentIndex = 0;
-        this.pausedAt = 0;
-        this.nextScheduledTime = 0;
-        this._clearPreScheduled();
-        this.playSegment(0);
-      } else {
-        this._clearPreScheduled();
-        this.stop();
-      }
-    };
+    source.onended = () => this._handlePlaybackEnded(source);
 
     source.start(startAt, offset);
     this.startProgressTracking(audioBuffer.duration);

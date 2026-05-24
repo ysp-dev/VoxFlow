@@ -1412,6 +1412,29 @@ function writeAsciiString(view, offset, value) {
   }
 }
 
+// Finds the first/last frame where any channel exceeds the silence threshold.
+// Returns trimmed {start, end} frame indices for gapless MP3 concatenation.
+function getAudioBounds(buffer, threshold = 0.0005) {
+  const len = buffer.length;
+  let firstSignal = len;
+  let lastSignal = 0;
+
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const data = buffer.getChannelData(ch);
+    for (let i = 0; i < len; i++) {
+      if (Math.abs(data[i]) >= threshold) { firstSignal = Math.min(firstSignal, i); break; }
+    }
+    for (let i = len - 1; i >= 0; i--) {
+      if (Math.abs(data[i]) >= threshold) { lastSignal = Math.max(lastSignal, i); break; }
+    }
+  }
+
+  if (firstSignal >= len || lastSignal === 0) return { start: 0, end: len };
+  // Keep ~30 ms of natural tail decay after the last signal frame.
+  const tailPad = Math.round(buffer.sampleRate * 0.03);
+  return { start: firstSignal, end: Math.min(lastSignal + 1 + tailPad, len) };
+}
+
 function createWavBlobFromAudioBuffers(audioBuffers) {
   if (!audioBuffers.length) {
     throw new Error('연속 재생용 오디오가 없습니다.');
@@ -1420,11 +1443,17 @@ function createWavBlobFromAudioBuffers(audioBuffers) {
   const sampleRate = audioBuffers[0].sampleRate;
   const numberOfChannels = Math.max(...audioBuffers.map(buffer => buffer.numberOfChannels || 1));
   const bytesPerSample = 2;
+
+  // Compute silence-trimmed bounds for each buffer to remove MP3 encoder/decoder padding.
+  const bounds = audioBuffers.map(buf => getAudioBounds(buf));
+  const trimmedLengths = bounds.map((b, i) => b.end - b.start);
+
   const segmentStarts = [];
-  const totalFrames = audioBuffers.reduce((sum, buffer) => {
+  const totalFrames = trimmedLengths.reduce((sum, len) => {
     segmentStarts.push(sum / sampleRate);
-    return sum + buffer.length;
+    return sum + len;
   }, 0);
+
   const dataSize = totalFrames * numberOfChannels * bytesPerSample;
   const wavBuffer = new ArrayBuffer(44 + dataSize);
   const view = new DataView(wavBuffer);
@@ -1444,13 +1473,15 @@ function createWavBlobFromAudioBuffers(audioBuffers) {
   view.setUint32(40, dataSize, true);
 
   let writeOffset = 44;
-  for (const buffer of audioBuffers) {
+  for (let b = 0; b < audioBuffers.length; b++) {
+    const buffer = audioBuffers[b];
+    const { start, end } = bounds[b];
     const channelData = Array.from({ length: numberOfChannels }, (_, channel) => {
       const sourceChannel = Math.min(channel, buffer.numberOfChannels - 1);
       return buffer.getChannelData(sourceChannel);
     });
 
-    for (let frame = 0; frame < buffer.length; frame++) {
+    for (let frame = start; frame < end; frame++) {
       for (let channel = 0; channel < numberOfChannels; channel++) {
         const sample = Math.max(-1, Math.min(1, channelData[channel][frame] || 0));
         view.setInt16(writeOffset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);

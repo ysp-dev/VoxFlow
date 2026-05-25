@@ -4,7 +4,11 @@
   const fence = String.fromCharCode(96, 96, 96);
   const iconPaths = {
     'waves': '<path d="M2 12c3-5 5 5 8 0s5-5 8 0 5 5 8 0"/><path d="M2 6c3-5 5 5 8 0s5-5 8 0 5 5 8 0"/><path d="M2 18c3-5 5 5 8 0s5-5 8 0 5 5 8 0"/>',
+    'moon': '<path d="M12 3a6 6 0 1 0 9 7.4A8 8 0 1 1 12 3z"/>',
+    'sun': '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
     'key-round': '<path d="M2 18l6-6"/><circle cx="14" cy="10" r="6"/><path d="M8 18l3 3"/><path d="M11 15l3 3"/>',
+    'eye': '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    'eye-off': '<path d="M3 3l18 18"/><path d="M10.6 10.6A2 2 0 0 0 13.4 13.4"/><path d="M9.9 4.2A9.8 9.8 0 0 1 12 4c6.5 0 10 8 10 8a17.8 17.8 0 0 1-3.2 4.3"/><path d="M6.6 6.7C3.7 8.6 2 12 2 12s3.5 8 10 8a9.9 9.9 0 0 0 4.4-1"/>',
     'lock': '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
     'file-text': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/>',
     'align-left': '<path d="M3 6h18"/><path d="M3 12h14"/><path d="M3 18h18"/>',
@@ -27,6 +31,8 @@
     'repeat': '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
     'clipboard': '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h6"/>',
     'download': '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+    'brain-circuit': '<path d="M12 5a3 3 0 0 0-5.2-2 3 3 0 0 0-3 5 3 3 0 0 0 0 5 3 3 0 0 0 3 5A3 3 0 0 0 12 16"/><path d="M12 5a3 3 0 0 1 5.2-2 3 3 0 0 1 3 5 3 3 0 0 1 0 5 3 3 0 0 1-3 5A3 3 0 0 1 12 16"/><path d="M8 8h8"/><path d="M8 12h3"/><path d="M13 12h3"/><path d="M8 16h8"/><circle cx="8" cy="8" r="1"/><circle cx="16" cy="8" r="1"/><circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/>',
+    'mic': '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/><path d="M8 22h8"/>',
   };
 
   function copyInlineStyles(source, target) {

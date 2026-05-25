@@ -2652,6 +2652,8 @@ function setupApiKey() {
    ========================================================================== */
 
 function setupTabs() {
+  syncGenerateButtonVisibility();
+
   elements.tabText.addEventListener('click', () => {
     if (state.isMarkdownMode) {
       state.isMarkdownMode = false;
@@ -2664,9 +2666,13 @@ function setupTabs() {
       state.rawHtml = '';
       state.currentFile = null;
       state.lastRender = { html: '', segments: [] };
+      elements.fileInput.value = '';
+      elements.fileInfoCard.classList.add('hidden');
+      elements.uploadZone.classList.remove('hidden');
       currentViewMode = 'preview';
       queue.setSegments([]);
       renderPreview('', []);
+      syncGenerateButtonVisibility();
     }
   });
 
@@ -2681,8 +2687,16 @@ function setupTabs() {
       state.segments = [];
       queue.setSegments([]);
       renderPreview('', []);
+      syncGenerateButtonVisibility();
     }
   });
+}
+
+function syncGenerateButtonVisibility() {
+  if (state.isTransforming) return;
+  const hasMarkdownFile = Boolean(state.currentFile?.content);
+  elements.btnGenerate.classList.toggle('hidden', state.isMarkdownMode);
+  elements.btnGenerateMd.classList.toggle('hidden', !state.isMarkdownMode || !hasMarkdownFile);
 }
 
 /* ==========================================================================
@@ -2733,7 +2747,7 @@ function setupUploadZone() {
     elements.fileInput.value = '';
     elements.fileInfoCard.classList.add('hidden');
     elements.uploadZone.classList.remove('hidden');
-    elements.btnGenerateMd.classList.add('hidden');
+    syncGenerateButtonVisibility();
     state.segments = [];
     queue.setSegments([]);
     renderPreview('', []);
@@ -2773,7 +2787,7 @@ function handleFileImport(file) {
   reader.onload = (e) => {
     if (state.currentFile !== fileToken) return;
     state.currentFile.content = e.target.result;
-    elements.btnGenerateMd.classList.remove('hidden');
+    syncGenerateButtonVisibility();
     showRawPreview(e.target.result);
     if (window.lucide) window.lucide.createIcons();
   };
@@ -2781,6 +2795,7 @@ function handleFileImport(file) {
     state.currentFile = null;
     elements.fileInfoCard.classList.add('hidden');
     elements.uploadZone.classList.remove('hidden');
+    syncGenerateButtonVisibility();
     showNotification('파일을 읽는 중 오류가 발생했습니다.');
   };
   reader.readAsText(file);
@@ -3068,6 +3083,7 @@ function setTransformingUi(isTransforming) {
     elements.btnGenerateMd.classList.remove('btn-cancel');
     elements.btnGenerateMd.disabled = false;
     elements.btnGenerateMd.innerHTML = '<i data-lucide="sparkles"></i> 파일 분석 및 플레이리스트 생성';
+    syncGenerateButtonVisibility();
     if (window.lucide) window.lucide.createIcons();
   }
   updateWakeLock();

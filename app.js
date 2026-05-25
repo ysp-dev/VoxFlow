@@ -546,6 +546,7 @@ function updateExportRowVisibility() {
 
 const MAX_READY_AUDIO_BUFFERS = 12;
 const PREFETCH_SEGMENT_COUNT = 4;
+const INTER_CHUNK_PAUSE_SECONDS = 0.65;
 const STABLE_PLAYBACK_STORAGE_KEY = 'voxflow_stable_playback';
 
 function sleep(ms, signal = null) {
@@ -1441,7 +1442,7 @@ function getAudioBounds(buffer, threshold = 0.0005) {
   return { start: firstSignal, end: Math.min(lastSignal + 1 + tailPad, len) };
 }
 
-function createWavBlobFromAudioBuffers(audioBuffers) {
+function createWavBlobFromAudioBuffers(audioBuffers, gapSeconds = INTER_CHUNK_PAUSE_SECONDS) {
   if (!audioBuffers.length) {
     throw new Error('연속 재생용 오디오가 없습니다.');
   }
@@ -1453,11 +1454,12 @@ function createWavBlobFromAudioBuffers(audioBuffers) {
   // Compute silence-trimmed bounds for each buffer to remove MP3 encoder/decoder padding.
   const bounds = audioBuffers.map(buf => getAudioBounds(buf));
   const trimmedLengths = bounds.map((b, i) => b.end - b.start);
+  const gapFrames = Math.max(0, Math.round(sampleRate * gapSeconds));
 
   const segmentStarts = [];
-  const totalFrames = trimmedLengths.reduce((sum, len) => {
+  const totalFrames = trimmedLengths.reduce((sum, len, index) => {
     segmentStarts.push(sum / sampleRate);
-    return sum + len;
+    return sum + len + (index < trimmedLengths.length - 1 ? gapFrames : 0);
   }, 0);
 
   const dataSize = totalFrames * numberOfChannels * bytesPerSample;
@@ -1493,6 +1495,10 @@ function createWavBlobFromAudioBuffers(audioBuffers) {
         view.setInt16(writeOffset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
         writeOffset += bytesPerSample;
       }
+    }
+
+    if (b < audioBuffers.length - 1) {
+      writeOffset += gapFrames * numberOfChannels * bytesPerSample;
     }
   }
 
@@ -1887,7 +1893,7 @@ class QueueManager {
       this.currentSourceNode.onended = null;
       this.currentSourceNode.stop();
       this.currentSourceNode = null;
-      this.pausedAt = (this.audioCtx.currentTime - this.startTime) * this.playbackRate;
+      this.pausedAt = Math.max(0, (this.audioCtx.currentTime - this.startTime) * this.playbackRate);
     }
 
     this.stopProgressTracking();
@@ -2420,7 +2426,7 @@ class QueueManager {
 
     if (segment?.audioBuffer) {
       this.startTime = scheduledStartAt;
-      this.nextScheduledTime = scheduledStartAt + (segment.audioBuffer.duration / this.playbackRate);
+      this.nextScheduledTime = scheduledStartAt + (segment.audioBuffer.duration / this.playbackRate) + INTER_CHUNK_PAUSE_SECONDS;
       this.startProgressTracking(segment.audioBuffer.duration);
     }
 
@@ -2450,7 +2456,7 @@ class QueueManager {
       this._clearPreScheduled();
       const nextSeg = this.segments[this.currentIndex];
       if (nextSeg?.audioBuffer) {
-        this.executePlayback(nextSeg.audioBuffer, 0);
+        this.executePlayback(nextSeg.audioBuffer, 0, this.audioCtx.currentTime + INTER_CHUNK_PAUSE_SECONDS);
       } else {
         this.nextScheduledTime = 0;
         this.playSegment(this.currentIndex);
@@ -2491,7 +2497,7 @@ class QueueManager {
 
     this.startTime = startAt - (offset / this.playbackRate);
     const segDuration = (audioBuffer.duration - offset) / this.playbackRate;
-    this.nextScheduledTime = startAt + segDuration;
+    this.nextScheduledTime = startAt + segDuration + INTER_CHUNK_PAUSE_SECONDS;
 
     source.onended = () => this._handlePlaybackEnded(source);
 
@@ -2536,7 +2542,7 @@ class QueueManager {
         return;
       }
       
-      const elapsed = (this.audioCtx.currentTime - this.startTime) * this.playbackRate;
+      const elapsed = Math.max(0, (this.audioCtx.currentTime - this.startTime) * this.playbackRate);
       this.emit('progress', elapsed, duration);
     }, 100);
   }

@@ -1597,13 +1597,22 @@ class QueueManager {
       }
     }
 
-    // Prime HTML5 Audio (차량 블루투스 모드) — autoplay 정책은 Web Audio와 별개
+    // Prime HTML5 Audio (차량 블루투스 모드) — autoplay 잠금 해제는 요소 단위이므로
+    // 나중에 prepareStableMedia()에서 이 요소를 그대로 재사용한다.
     if (this.useStablePlayback) {
       try {
         const silentWav = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-        const primer = new Audio(silentWav);
+        const primer = new Audio();
+        primer.preload = 'auto';
+        primer.playsInline = true;
+        primer.setAttribute('playsinline', '');
+        primer.setAttribute('webkit-playsinline', '');
         primer.volume = 0;
-        primer.play().catch(() => {});
+        primer.src = silentWav;
+        primer.play().then(() => {
+          primer.pause();
+          this._primedAudio = primer;
+        }).catch(() => {});
       } catch {
         // Priming blocked; user will need to tap play manually.
       }
@@ -1916,7 +1925,8 @@ class QueueManager {
 
     this.setStatus('buffering');
     const { blob, segmentStarts, duration } = createWavBlobFromAudioBuffers(audioBuffers);
-    const audio = new Audio();
+    const audio = this._primedAudio || new Audio();
+    this._primedAudio = null;
     audio.preload = 'auto';
     audio.playsInline = true;
     audio.setAttribute('playsinline', '');
@@ -2081,6 +2091,11 @@ class QueueManager {
   }
 
   _destroyStableMedia() {
+    if (this._primedAudio) {
+      this._primedAudio.pause();
+      this._primedAudio.removeAttribute('src');
+      this._primedAudio = null;
+    }
     if (this.mediaAudio) {
       this.mediaAudio.pause();
       this.mediaAudio.removeAttribute('src');

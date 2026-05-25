@@ -1593,6 +1593,7 @@ class QueueManager {
     this.useStablePlayback = false;
     this.mediaAudio = null;
     this.mediaObjectUrl = null;
+    this._primedAudio = null;
     this.primedObjectUrl = null;
     this.autoplayPrimeId = 0;
     this.autoplayPrimePromise = null;
@@ -1640,6 +1641,19 @@ class QueueManager {
     }
   }
 
+  async ensureAudioContextRunning() {
+    this.initAudio();
+    if (!this.audioCtx) return false;
+    if (this.audioCtx.state === 'suspended') {
+      try {
+        await this.audioCtx.resume();
+      } catch {
+        return false;
+      }
+    }
+    return this.audioCtx.state === 'running';
+  }
+
   primeForAutoplay() {
     requestPlaybackAudioSession();
     this.initAudio();
@@ -1660,10 +1674,29 @@ class QueueManager {
       }
     }
 
-    // Prime HTML5 Audio to request mobile/BT audio focus. In stable playback,
-    // the same unlocked element is reused later for the generated speech blob.
-    if (this._primedAudio || this.primedObjectUrl || this.autoplayPrimePromise) {
-      this._destroyStableMedia();
+    // Keep a tiny foreground audio stream alive while text/voice generation runs.
+    // This is the only browser-safe way to request mobile/BT audio focus from
+    // other tabs/apps without directly controlling them.
+    if (this._primedAudio && this.primedObjectUrl) {
+      if (this._primedAudio.paused) {
+        this.autoplayPrimePromise = this._primedAudio.play()
+          .then(() => {
+            this.autoplayPrimePromise = null;
+            requestPlaybackAudioSession();
+            return this._primedAudio;
+          })
+          .catch(() => {
+            this.autoplayPrimePromise = null;
+            return null;
+          });
+      }
+      return this.autoplayPrimePromise || Promise.resolve(this._primedAudio);
+    }
+    if (this.autoplayPrimePromise) {
+      return this.autoplayPrimePromise;
+    }
+    if (this._primedAudio || this.primedObjectUrl) {
+      this._clearPrimedAudio();
     }
 
     try {
@@ -1676,33 +1709,29 @@ class QueueManager {
       primer.setAttribute('webkit-playsinline', '');
       primer.muted = false;
       primer.volume = 0.08;
+      primer.loop = true;
       primer.src = primerUrl;
-      this.autoplayPrimePromise = primer.play().then(async () => {
-        await new Promise(resolve => setTimeout(resolve, 90));
+      this.autoplayPrimePromise = primer.play().then(() => {
         if (primeId !== this.autoplayPrimeId) {
+          primer.pause();
+          primer.removeAttribute('src');
+          primer.load();
           URL.revokeObjectURL(primerUrl);
           return null;
         }
 
-        primer.pause();
-        primer.currentTime = 0;
-
-        if (this.useStablePlayback) {
-          this._primedAudio = primer;
-          this.primedObjectUrl = primerUrl;
-        } else {
-          primer.removeAttribute('src');
-          primer.load();
-          URL.revokeObjectURL(primerUrl);
-          this.autoplayPrimePromise = null;
-        }
-
+        this._primedAudio = primer;
+        this.primedObjectUrl = primerUrl;
+        this.autoplayPrimePromise = null;
         requestPlaybackAudioSession();
         return primer;
       }).catch(() => {
         if (primeId === this.autoplayPrimeId) {
           this.autoplayPrimePromise = null;
         }
+        primer.pause();
+        primer.removeAttribute('src');
+        primer.load();
         URL.revokeObjectURL(primerUrl);
         return null;
       });
@@ -1809,7 +1838,7 @@ class QueueManager {
    */
   async play() {
     requestPlaybackAudioSession();
-    this.initAudio();
+    await this.ensureAudioContextRunning();
     
     if (this.segments.length === 0) return;
 
@@ -1870,10 +1899,10 @@ class QueueManager {
   stop(options = {}) {
     const { preservePrimedAudio = false } = options;
     this.isPlaying = false;
-    this.setStatus('idle');
     this._clearPreScheduled();
     this.nextScheduledTime = 0;
     this._destroyStableMedia({ preservePrimedAudio });
+    this.setStatus('idle');
 
     if (this.generationAbortController) {
       this.generationAbortController.abort();
@@ -1890,6 +1919,12 @@ class QueueManager {
     this.currentIndex = 0;
     this.stopProgressTracking();
     this.emit('progress', 0, 1);
+  }
+
+  hasActiveAudioFocus() {
+    const primedPlaying = Boolean(this._primedAudio && !this._primedAudio.paused);
+    const mediaPlaying = Boolean(this.mediaAudio && !this.mediaAudio.paused);
+    return primedPlaying || mediaPlaying;
   }
 
   /**
@@ -1915,9 +1950,7 @@ class QueueManager {
    */
   jumpToSegment(index) {
     if (index < 0 || index >= this.segments.length) return;
-    if (!this.isPlaying) {
-      this.primeForAutoplay();
-    }
+    const shouldPrimeAudioFocus = !this.isPlaying;
 
     if (this.useStablePlayback && this.mediaAudio) {
       this.currentIndex = index;
@@ -1937,6 +1970,9 @@ class QueueManager {
       this.stop();
       this.currentIndex = index;
       this.isPlaying = true;
+      if (shouldPrimeAudioFocus) {
+        this.primeForAutoplay();
+      }
       this.playStable();
       return;
     }
@@ -1944,6 +1980,9 @@ class QueueManager {
     this.stop();
     this.currentIndex = index;
     this.isPlaying = true;
+    if (shouldPrimeAudioFocus) {
+      this.primeForAutoplay();
+    }
     this.playSegment(index);
   }
 
@@ -1974,12 +2013,19 @@ class QueueManager {
     this.mediaAudio.volume = this.volume;
     this.mediaAudio.playbackRate = this.playbackRate;
     this.emit('segmentStart', this.currentIndex);
+    requestPlaybackAudioSession();
 
     try {
       await this.mediaAudio.play();
+      if (this._primedAudio && this._primedAudio !== this.mediaAudio) {
+        this._clearPrimedAudio();
+      }
       this.setStatus('playing');
       this.startStableProgressTracking();
     } catch (err) {
+      if (this._primedAudio && this._primedAudio !== this.mediaAudio) {
+        this._clearPrimedAudio();
+      }
       this.isPlaying = false;
       this.setStatus('paused');
       showNotification('브라우저가 자동 재생을 막았습니다. 재생 버튼을 한 번 더 눌러주세요.', 'warning');
@@ -1999,62 +2045,89 @@ class QueueManager {
     this.primedObjectUrl = null;
     this.autoplayPrimePromise = null;
     this._destroyStableMedia();
-    if (primedObjectUrl) {
-      URL.revokeObjectURL(primedObjectUrl);
-    }
+    let nextMediaObjectUrl = null;
 
-    if (!this.generationAbortController) {
-      this.generationAbortController = new AbortController();
-    }
+    try {
+      if (!this.generationAbortController) {
+        this.generationAbortController = new AbortController();
+      }
 
-    const { signal } = this.generationAbortController;
-    const capturedVersion = this.queueVersion;
-    const audioBuffers = [];
+      const { signal } = this.generationAbortController;
+      const capturedVersion = this.queueVersion;
+      const audioBuffers = [];
 
-    for (let i = 0; i < this.segments.length; i++) {
-      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      if (this.queueVersion !== capturedVersion) throw new DOMException('Aborted', 'AbortError');
-
-      const segment = this.segments[i];
-      if (!segment.audioBuffer) {
-        segment.state = 'generating';
-        this.emit('stateUpdate', this.segments);
-
-        const result = await generateSpeech(segment.ttsText || segment.text, { ...this.apiConfig, signal });
+      for (let i = 0; i < this.segments.length; i++) {
         if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
         if (this.queueVersion !== capturedVersion) throw new DOMException('Aborted', 'AbortError');
 
-        segment.audioBuffer = await this.decodeAudio(result.arrayBuffer);
-        segment.state = 'ready';
-        segment.errorMsg = null;
-        this.emit('stateUpdate', this.segments);
+        const segment = this.segments[i];
+        if (!segment.audioBuffer) {
+          segment.state = 'generating';
+          this.emit('stateUpdate', this.segments);
+
+          const result = await generateSpeech(segment.ttsText || segment.text, { ...this.apiConfig, signal });
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          if (this.queueVersion !== capturedVersion) throw new DOMException('Aborted', 'AbortError');
+
+          segment.audioBuffer = await this.decodeAudio(result.arrayBuffer);
+          segment.state = 'ready';
+          segment.errorMsg = null;
+          this.emit('stateUpdate', this.segments);
+        }
+        audioBuffers.push(segment.audioBuffer);
       }
-      audioBuffers.push(segment.audioBuffer);
+
+      this.setStatus('buffering');
+      requestPlaybackAudioSession();
+      const { blob, segmentStarts, duration } = createWavBlobFromAudioBuffers(audioBuffers);
+      const audio = primedAudio || new Audio();
+      audio.preload = 'auto';
+      audio.playsInline = true;
+      audio.setAttribute('playsinline', '');
+      audio.setAttribute('webkit-playsinline', '');
+      audio.loop = false;
+      nextMediaObjectUrl = URL.createObjectURL(blob);
+      if (primedAudio) {
+        try {
+          primedAudio.pause();
+          primedAudio.currentTime = 0;
+        } catch {}
+      }
+      audio.src = nextMediaObjectUrl;
+      audio.load();
+      if (primedObjectUrl) {
+        URL.revokeObjectURL(primedObjectUrl);
+      }
+      audio.volume = this.volume;
+      audio.playbackRate = this.playbackRate;
+      audio.addEventListener('ended', () => this._handleStableEnded());
+      audio.addEventListener('error', () => {
+        if (!this.isPlaying) return;
+        this.isPlaying = false;
+        this.setStatus('idle');
+        showNotification('차량 모드 오디오 재생 중 오류가 발생했습니다.', 'error');
+      });
+
+      this.mediaAudio = audio;
+      this.mediaObjectUrl = nextMediaObjectUrl;
+      this.mediaSegmentStarts = segmentStarts;
+      this.mediaDuration = duration;
+      this.mediaActiveIndex = -1;
+      nextMediaObjectUrl = null;
+    } catch (err) {
+      if (primedAudio) {
+        primedAudio.pause();
+        primedAudio.removeAttribute('src');
+        primedAudio.load();
+      }
+      if (primedObjectUrl) {
+        URL.revokeObjectURL(primedObjectUrl);
+      }
+      if (nextMediaObjectUrl) {
+        URL.revokeObjectURL(nextMediaObjectUrl);
+      }
+      throw err;
     }
-
-    this.setStatus('buffering');
-    const { blob, segmentStarts, duration } = createWavBlobFromAudioBuffers(audioBuffers);
-    const audio = primedAudio || new Audio();
-    audio.preload = 'auto';
-    audio.playsInline = true;
-    audio.setAttribute('playsinline', '');
-    audio.setAttribute('webkit-playsinline', '');
-    audio.src = URL.createObjectURL(blob);
-    audio.volume = this.volume;
-    audio.playbackRate = this.playbackRate;
-    audio.addEventListener('ended', () => this._handleStableEnded());
-    audio.addEventListener('error', () => {
-      if (!this.isPlaying) return;
-      this.isPlaying = false;
-      this.setStatus('idle');
-      showNotification('차량 모드 오디오 재생 중 오류가 발생했습니다.', 'error');
-    });
-
-    this.mediaAudio = audio;
-    this.mediaObjectUrl = audio.src;
-    this.mediaSegmentStarts = segmentStarts;
-    this.mediaDuration = duration;
-    this.mediaActiveIndex = -1;
   }
 
   /**
@@ -2201,18 +2274,7 @@ class QueueManager {
   _destroyStableMedia(options = {}) {
     const { preservePrimedAudio = false } = options;
     if (!preservePrimedAudio) {
-      this.autoplayPrimeId++;
-      this.autoplayPrimePromise = null;
-    }
-    if (this._primedAudio && !preservePrimedAudio) {
-      this._primedAudio.pause();
-      this._primedAudio.removeAttribute('src');
-      this._primedAudio.load();
-      this._primedAudio = null;
-    }
-    if (this.primedObjectUrl && !preservePrimedAudio) {
-      URL.revokeObjectURL(this.primedObjectUrl);
-      this.primedObjectUrl = null;
+      this._clearPrimedAudio();
     }
     if (this.mediaAudio) {
       this.mediaAudio.pause();
@@ -2227,6 +2289,21 @@ class QueueManager {
     this.mediaSegmentStarts = [];
     this.mediaDuration = 0;
     this.mediaActiveIndex = -1;
+  }
+
+  _clearPrimedAudio() {
+    this.autoplayPrimeId++;
+    this.autoplayPrimePromise = null;
+    if (this._primedAudio) {
+      this._primedAudio.pause();
+      this._primedAudio.removeAttribute('src');
+      this._primedAudio.load();
+      this._primedAudio = null;
+    }
+    if (this.primedObjectUrl) {
+      URL.revokeObjectURL(this.primedObjectUrl);
+      this.primedObjectUrl = null;
+    }
   }
 
   _getStableSegmentIndex(time) {
@@ -2391,8 +2468,16 @@ class QueueManager {
     }
   }
 
-  executePlayback(audioBuffer, offset = 0, scheduledStartAt = null) {
-    this.setStatus('playing');
+  async executePlayback(audioBuffer, offset = 0, scheduledStartAt = null) {
+    requestPlaybackAudioSession();
+    const audioContextReady = await this.ensureAudioContextRunning();
+    if (!audioContextReady) {
+      this.isPlaying = false;
+      this.setStatus('paused');
+      showNotification('브라우저 오디오 출력을 열지 못했습니다. 재생 버튼을 다시 눌러주세요.', 'warning');
+      return;
+    }
+    if (!this.isPlaying) return;
 
     const now = this.audioCtx.currentTime;
     const startAt = (scheduledStartAt !== null && scheduledStartAt > now)
@@ -2410,7 +2495,19 @@ class QueueManager {
 
     source.onended = () => this._handlePlaybackEnded(source);
 
-    source.start(startAt, offset);
+    try {
+      source.start(startAt, offset);
+    } catch (err) {
+      this.currentSourceNode = null;
+      this.isPlaying = false;
+      this.setStatus('paused');
+      showNotification('오디오 재생 시작에 실패했습니다. 재생 버튼을 다시 눌러주세요.', 'warning');
+      return;
+    }
+    if (!this.useStablePlayback) {
+      this._clearPrimedAudio();
+    }
+    this.setStatus('playing');
     this.startProgressTracking(audioBuffer.duration);
   }
 
@@ -3004,7 +3101,11 @@ function cancelTransform() {
   }
 }
 
-async function triggerParsing() {
+async function triggerParsing(options = {}) {
+  const {
+    autoplay = elements.chkAutoplay.checked,
+    primeAudioFocus = autoplay
+  } = options;
   let sourceText = '';
   cancelTransform();
   queue.stop();
@@ -3036,7 +3137,7 @@ async function triggerParsing() {
     return false;
   }
 
-  if (elements.chkAutoplay.checked) {
+  if (primeAudioFocus) {
     queue.primeForAutoplay();
   }
 
@@ -3058,7 +3159,7 @@ async function triggerParsing() {
     state.configSnapshot = { voice: state.voice, styleHint: state.styleHint };
     renderPreview(parseResult.html, parseResult.segments);
     showNotification('GPT-5 Mini 구조 변환이 완료되었습니다.', 'success');
-    if (elements.chkAutoplay.checked) {
+    if (autoplay) {
       await queue.play();
     }
     return true;
@@ -3267,7 +3368,7 @@ function setupPlayerControls() {
     }
 
     if (state.segments.length === 0) {
-      const parsed = await triggerParsing();
+      const parsed = await triggerParsing({ autoplay: false, primeAudioFocus: true });
       if (!parsed) return;
     }
     
@@ -3337,7 +3438,9 @@ function setupQueueListeners() {
       elements.btnPlayPause.classList.remove('playing');
       elements.btnPlayPause.innerHTML = '<i data-lucide="play"></i>';
       if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = (status === 'paused') ? 'paused' : 'none';
+        navigator.mediaSession.playbackState = queue.hasActiveAudioFocus()
+          ? 'playing'
+          : ((status === 'paused') ? 'paused' : 'none');
       }
     }
 

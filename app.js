@@ -1503,7 +1503,7 @@ function createWavBlobFromAudioBuffers(audioBuffers) {
   };
 }
 
-function createSilentWavBlob(durationSeconds = 0.08, sampleRate = 8000) {
+function createAudioFocusWavBlob(durationSeconds = 0.14, sampleRate = 8000) {
   const frameCount = Math.max(1, Math.floor(durationSeconds * sampleRate));
   const bytesPerSample = 2;
   const dataSize = frameCount * bytesPerSample;
@@ -1524,7 +1524,36 @@ function createSilentWavBlob(durationSeconds = 0.08, sampleRate = 8000) {
   writeAsciiString(view, 36, 'data');
   view.setUint32(40, dataSize, true);
 
+  let writeOffset = 44;
+  const fadeFrames = Math.max(1, Math.floor(frameCount * 0.25));
+  for (let frame = 0; frame < frameCount; frame++) {
+    const fadeIn = Math.min(1, frame / fadeFrames);
+    const fadeOut = Math.min(1, (frameCount - frame - 1) / fadeFrames);
+    const envelope = Math.max(0, Math.min(fadeIn, fadeOut));
+    const sample = Math.sin((2 * Math.PI * 220 * frame) / sampleRate) * 0.006 * envelope;
+    view.setInt16(writeOffset, sample * 0x7fff, true);
+    writeOffset += bytesPerSample;
+  }
+
   return new Blob([wavBuffer], { type: 'audio/wav' });
+}
+
+function requestPlaybackAudioSession() {
+  if ('audioSession' in navigator && navigator.audioSession) {
+    try {
+      navigator.audioSession.type = 'playback';
+    } catch {
+      // Unsupported session types are ignored by browsers that expose a partial API.
+    }
+  }
+
+  if ('mediaSession' in navigator) {
+    try {
+      navigator.mediaSession.playbackState = 'playing';
+    } catch {
+      // Media Session state is best-effort and should never block playback.
+    }
+  }
 }
 
 /**
@@ -1612,6 +1641,7 @@ class QueueManager {
   }
 
   primeForAutoplay() {
+    requestPlaybackAudioSession();
     this.initAudio();
 
     // Prime Web Audio API context (일반 모드)
@@ -1630,42 +1660,55 @@ class QueueManager {
       }
     }
 
-    // Prime HTML5 Audio (차량 블루투스 모드) — autoplay 잠금 해제는 요소 단위이므로
-    // 나중에 prepareStableMedia()에서 이 요소를 그대로 재사용한다.
-    if (this.useStablePlayback) {
-      if (this._primedAudio || this.primedObjectUrl) {
-        this._destroyStableMedia();
-      }
-      try {
-        const primeId = ++this.autoplayPrimeId;
-        const primerUrl = URL.createObjectURL(createSilentWavBlob());
-        const primer = new Audio();
-        primer.preload = 'auto';
-        primer.playsInline = true;
-        primer.setAttribute('playsinline', '');
-        primer.setAttribute('webkit-playsinline', '');
-        primer.muted = false;
-        primer.volume = 1;
-        primer.src = primerUrl;
-        this.autoplayPrimePromise = primer.play().then(() => {
-          if (primeId !== this.autoplayPrimeId) {
-            URL.revokeObjectURL(primerUrl);
-            return null;
-          }
-          primer.pause();
-          this._primedAudio = primer;
-          this.primedObjectUrl = primerUrl;
-          return primer;
-        }).catch(() => {
-          if (primeId === this.autoplayPrimeId) {
-            this.autoplayPrimePromise = null;
-          }
+    // Prime HTML5 Audio to request mobile/BT audio focus. In stable playback,
+    // the same unlocked element is reused later for the generated speech blob.
+    if (this._primedAudio || this.primedObjectUrl || this.autoplayPrimePromise) {
+      this._destroyStableMedia();
+    }
+
+    try {
+      const primeId = ++this.autoplayPrimeId;
+      const primerUrl = URL.createObjectURL(createAudioFocusWavBlob());
+      const primer = new Audio();
+      primer.preload = 'auto';
+      primer.playsInline = true;
+      primer.setAttribute('playsinline', '');
+      primer.setAttribute('webkit-playsinline', '');
+      primer.muted = false;
+      primer.volume = 0.08;
+      primer.src = primerUrl;
+      this.autoplayPrimePromise = primer.play().then(async () => {
+        await new Promise(resolve => setTimeout(resolve, 90));
+        if (primeId !== this.autoplayPrimeId) {
           URL.revokeObjectURL(primerUrl);
           return null;
-        });
-      } catch {
-        // Priming blocked; user will need to tap play manually.
-      }
+        }
+
+        primer.pause();
+        primer.currentTime = 0;
+
+        if (this.useStablePlayback) {
+          this._primedAudio = primer;
+          this.primedObjectUrl = primerUrl;
+        } else {
+          primer.removeAttribute('src');
+          primer.load();
+          URL.revokeObjectURL(primerUrl);
+          this.autoplayPrimePromise = null;
+        }
+
+        requestPlaybackAudioSession();
+        return primer;
+      }).catch(() => {
+        if (primeId === this.autoplayPrimeId) {
+          this.autoplayPrimePromise = null;
+        }
+        URL.revokeObjectURL(primerUrl);
+        return null;
+      });
+      return this.autoplayPrimePromise;
+    } catch {
+      return Promise.resolve(null);
     }
   }
 
@@ -1765,6 +1808,7 @@ class QueueManager {
    * Start or resume playback of the queue.
    */
   async play() {
+    requestPlaybackAudioSession();
     this.initAudio();
     
     if (this.segments.length === 0) return;
@@ -1871,6 +1915,9 @@ class QueueManager {
    */
   jumpToSegment(index) {
     if (index < 0 || index >= this.segments.length) return;
+    if (!this.isPlaying) {
+      this.primeForAutoplay();
+    }
 
     if (this.useStablePlayback && this.mediaAudio) {
       this.currentIndex = index;
@@ -3236,7 +3283,8 @@ function setupPlayerControls() {
       if (state.voice !== state.configSnapshot.voice || state.styleHint !== state.configSnapshot.styleHint) {
         flushAudioBuffers();
       }
-      queue.play();
+      await queue.primeForAutoplay();
+      await queue.play();
     }
   });
 
@@ -3766,7 +3814,10 @@ if ('mediaSession' in navigator) {
     album: ''
   });
 
-  navigator.mediaSession.setActionHandler('play',  () => queue.play());
+  navigator.mediaSession.setActionHandler('play', async () => {
+    await queue.primeForAutoplay();
+    await queue.play();
+  });
   navigator.mediaSession.setActionHandler('pause', () => queue.pause());
   navigator.mediaSession.setActionHandler('nexttrack', () => queue.next());
   navigator.mediaSession.setActionHandler('previoustrack', () => queue.prev());

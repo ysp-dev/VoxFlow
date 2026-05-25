@@ -2379,11 +2379,8 @@ function flushAudioBuffers() {
 // DOM Elements
 const elements = {
   apiKeyInput: document.getElementById('api-key'),
-  apiKeyWrapper: document.getElementById('api-key-wrapper'),
-  btnSaveApiKey: document.getElementById('btn-save-api-key'),
-  btnEditApiKey: document.getElementById('btn-edit-api-key'),
-  btnDeleteApiKey: document.getElementById('btn-delete-api-key'),
-  chkPersistKey: document.getElementById('chk-persist-key'),
+  btnToggleKeyVis: document.getElementById('btn-toggle-key-vis'),
+  btnTheme: document.getElementById('btn-theme'),
   
   tabText: document.getElementById('tab-text'),
   tabMd: document.getElementById('tab-md'),
@@ -2529,94 +2526,55 @@ document.addEventListener('DOMContentLoaded', () => {
    ========================================================================== */
 
 function setupApiKey() {
-  // Prefer persistent (localStorage) key, fall back to session key
-  const savedKey = localStorage.getItem('voxflow_openai_api_key') || sessionStorage.getItem('voxflow_openai_api_key');
+  const savedKey = localStorage.getItem('voxflow_openai_api_key');
   if (savedKey) {
     state.apiKey = savedKey;
     elements.apiKeyInput.value = savedKey;
     queue.setConfig({ apiKey: savedKey });
-    elements.chkPersistKey.checked = Boolean(localStorage.getItem('voxflow_openai_api_key'));
-    setApiKeyEditMode(false);
-  } else {
-    setApiKeyEditMode(true);
   }
-  
-  elements.btnSaveApiKey.addEventListener('click', saveApiKey);
-  elements.btnEditApiKey.addEventListener('click', () => {
-    setApiKeyEditMode(true);
-    elements.apiKeyInput.focus();
-    elements.apiKeyInput.select();
-  });
-  elements.btnDeleteApiKey.addEventListener('click', async () => {
-    cancelTransform();
-    queue.stop();
-    flushAudioBuffers();
-    localStorage.removeItem('voxflow_openai_api_key');
-    sessionStorage.removeItem('voxflow_openai_api_key');
-    state.apiKey = '';
-    queue.setConfig({ apiKey: '' });
-    elements.apiKeyInput.value = '';
-    elements.chkPersistKey.checked = false;
-    setApiKeyEditMode(true);
-    await clearTtsCache();
-    refreshCacheCount();
-    showNotification('API Key와 TTS 캐시가 삭제되었습니다.', 'success');
-  });
 
-  elements.apiKeyInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      saveApiKey();
-    }
-  });
-
+  let saveTimer = null;
   elements.apiKeyInput.addEventListener('input', () => {
-    if (!elements.apiKeyInput.value.trim()) {
-      setApiKeySecurityState(false);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      const key = elements.apiKeyInput.value.trim();
+      if (key) {
+        localStorage.setItem('voxflow_openai_api_key', key);
+        state.apiKey = key;
+        queue.setConfig({ apiKey: key });
+      } else {
+        localStorage.removeItem('voxflow_openai_api_key');
+        state.apiKey = '';
+        queue.setConfig({ apiKey: '' });
+      }
+    }, 400);
+  });
+
+  elements.btnToggleKeyVis.addEventListener('click', () => {
+    const isPassword = elements.apiKeyInput.type === 'password';
+    elements.apiKeyInput.type = isPassword ? 'text' : 'password';
+    const icon = elements.btnToggleKeyVis.querySelector('i, svg');
+    if (icon) {
+      icon.setAttribute('data-lucide', isPassword ? 'eye-off' : 'eye');
+      if (window.lucide) window.lucide.createIcons();
     }
   });
-}
 
-function saveApiKey() {
-  const key = elements.apiKeyInput.value.trim();
-
-  if (key) {
-    const persist = elements.chkPersistKey.checked;
-    if (persist) {
-      localStorage.setItem('voxflow_openai_api_key', key);
-      sessionStorage.removeItem('voxflow_openai_api_key');
-    } else {
-      sessionStorage.setItem('voxflow_openai_api_key', key);
-      localStorage.removeItem('voxflow_openai_api_key');
+  elements.btnTheme.addEventListener('click', () => {
+    const isDark = document.body.classList.toggle('dark');
+    localStorage.setItem('voxflow_theme', isDark ? 'dark' : 'light');
+    const icon = elements.btnTheme.querySelector('i, svg');
+    if (icon) {
+      icon.setAttribute('data-lucide', isDark ? 'sun' : 'moon');
+      if (window.lucide) window.lucide.createIcons();
     }
-    state.apiKey = key;
-    queue.setConfig({ apiKey: key });
-    setApiKeySecurityState(true);
-    setApiKeyEditMode(false);
-  } else {
-    localStorage.removeItem('voxflow_openai_api_key');
-    sessionStorage.removeItem('voxflow_openai_api_key');
-    state.apiKey = '';
-    queue.setConfig({ apiKey: '' });
-    setApiKeySecurityState(false);
-    setApiKeyEditMode(true);
-  }
-}
+  });
 
-function setApiKeySecurityState(isSecure) {
-  if (isSecure) {
-    elements.apiKeyWrapper.classList.add('secure');
-  } else {
-    elements.apiKeyWrapper.classList.remove('secure');
+  if (localStorage.getItem('voxflow_theme') === 'dark') {
+    document.body.classList.add('dark');
+    const icon = elements.btnTheme.querySelector('i, svg');
+    if (icon) icon.setAttribute('data-lucide', 'sun');
   }
-}
-
-function setApiKeyEditMode(isEditing) {
-  elements.apiKeyInput.readOnly = !isEditing;
-  elements.btnSaveApiKey.classList.toggle('hidden', !isEditing);
-  elements.btnEditApiKey.classList.toggle('hidden', isEditing);
-  elements.btnDeleteApiKey.classList.toggle('hidden', isEditing);
-  setApiKeySecurityState(Boolean(state.apiKey) && !isEditing);
 }
 
 /* ==========================================================================

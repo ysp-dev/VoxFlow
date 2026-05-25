@@ -22,7 +22,7 @@
   <div class="app-container">
     <header class="glass-panel">
       <div class="logo-container"><div class="logo-icon"><i data-lucide="waves"></i></div><div class="logo-text">VOXFLOW</div></div>
-      <div class="header-actions"><div class="apikey-container"><div id="api-key-wrapper" class="apikey-input-wrapper"><i data-lucide="key-round"></i><input type="password" id="api-key" class="apikey-input" placeholder="OpenAI API Key 입력..." autocomplete="off" aria-label="OpenAI API Key"><i class="lock-icon" data-lucide="lock" style="width:14px; height:14px; margin-left:6px;"></i><label class="apikey-persist-label"><input type="checkbox" id="chk-persist-key">기기에 저장</label><button id="btn-save-api-key" class="apikey-action" type="button" aria-label="API Key 저장">저장</button><button id="btn-edit-api-key" class="apikey-action hidden" type="button" aria-label="API Key 수정">수정</button><button id="btn-delete-api-key" class="apikey-action apikey-delete hidden" type="button" aria-label="API Key 삭제">삭제</button></div></div></div>
+      <div class="header-actions"><button id="btn-theme" class="btn-theme" type="button" aria-label="테마 전환"><i data-lucide="moon"></i></button><div id="api-key-wrapper" class="apikey-input-wrapper"><i data-lucide="key-round" style="width:15px;height:15px;flex-shrink:0;color:var(--secondary);"></i><input type="password" id="api-key" class="apikey-input" placeholder="OpenAI API Key 입력..." autocomplete="off" aria-label="OpenAI API Key"><button id="btn-toggle-key-vis" class="apikey-eye-btn" type="button" aria-label="API Key 보기"><i data-lucide="eye" style="width:15px;height:15px;"></i></button></div></div>
     </header>
 
     <main class="main-grid">

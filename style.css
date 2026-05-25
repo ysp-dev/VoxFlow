@@ -187,37 +187,45 @@ header {
 }
 
 /* API Key Input Styling */
-.apikey-container {
-  position: relative;
+.btn-theme {
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--border-light);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: var(--transition-smooth);
+}
+
+.btn-theme:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.btn-theme i, .btn-theme svg {
+  width: 16px;
+  height: 16px;
 }
 
 .apikey-input-wrapper {
   display: flex;
   align-items: center;
+  gap: 8px;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  padding: 4px 12px;
+  border-radius: 999px;
+  padding: 6px 12px;
   transition: var(--transition-smooth);
 }
 
 .apikey-input-wrapper:focus-within {
   border-color: var(--primary);
   box-shadow: 0 0 10px var(--primary-glow);
-}
-
-.apikey-input-wrapper i,
-.apikey-input-wrapper svg {
-  color: var(--text-muted);
-  margin-right: 8px;
-}
-
-.apikey-input-wrapper.secure i.lock-icon,
-.apikey-input-wrapper.secure svg.lock-icon {
-  color: var(--secondary);
-  animation: secure-pulse 2s infinite ease-in-out;
 }
 
 .apikey-input {
@@ -228,63 +236,24 @@ header {
   font-size: 13px;
   outline: none;
   width: 220px;
-  padding: 6px 0;
+  padding: 0;
 }
 
-.apikey-input[readonly] {
-  color: var(--text-secondary);
-  cursor: default;
-}
-
-.apikey-action {
-  flex-shrink: 0;
-  background: rgba(6, 182, 212, 0.12);
-  border: 1px solid rgba(6, 182, 212, 0.32);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
-  margin-left: 8px;
-  min-width: 42px;
-  padding: 7px 9px;
-  transition: var(--transition-smooth);
-}
-
-.apikey-action:hover {
-  background: rgba(6, 182, 212, 0.22);
-  border-color: rgba(6, 182, 212, 0.55);
-}
-
-.apikey-delete {
-  background: rgba(239, 68, 68, 0.08);
-  border-color: rgba(239, 68, 68, 0.28);
-  color: #dc2626;
-}
-
-.apikey-delete:hover {
-  background: rgba(239, 68, 68, 0.18);
-  border-color: rgba(239, 68, 68, 0.5);
-}
-
-.apikey-persist-label {
+.apikey-eye-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
+  justify-content: center;
+  background: none;
+  border: none;
   color: var(--text-muted);
-  white-space: nowrap;
   cursor: pointer;
-  user-select: none;
+  padding: 0;
+  flex-shrink: 0;
+  transition: color 0.2s;
 }
 
-.apikey-persist-label input[type="checkbox"] {
-  width: 12px;
-  height: 12px;
-  cursor: pointer;
-  accent-color: var(--accent);
+.apikey-eye-btn:hover {
+  color: var(--text-primary);
 }
 
 /* Buttons */
@@ -1182,11 +1151,6 @@ header {
   100% { box-shadow: 0 0 15px rgba(139, 92, 246, 0.4); }
 }
 
-@keyframes secure-pulse {
-  0% { opacity: 0.6; }
-  50% { opacity: 1; text-shadow: 0 0 8px rgba(6, 182, 212, 0.5); }
-  100% { opacity: 0.6; }
-}
 
 @keyframes pulse-dot {
   0% { transform: scale(0.8); opacity: 0.5; }
@@ -1304,10 +1268,8 @@ header {
   .app-container { padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); gap: 14px; }
   header { flex-direction: column; align-items: stretch; gap: 14px; padding: 14px; }
   .logo-text { font-size: 22px; }
-  .apikey-container, .apikey-input-wrapper { width: 100%; }
-  .apikey-input-wrapper { flex-wrap: wrap; row-gap: 8px; }
+  .apikey-input-wrapper { width: 100%; }
   .apikey-input { flex: 1; min-width: 0; }
-  .apikey-persist-label { margin-left: 0; }
   .preview-header-row { flex-wrap: wrap; gap: 8px 6px; }
   .preview-title { flex: 1 1 100%; }
   .main-grid { gap: 14px; }
@@ -1359,4 +1321,57 @@ header {
   background: var(--glass-bg, rgba(255,255,255,0.06));
   border: 1px solid var(--border-color, rgba(255,255,255,0.1));
   letter-spacing: 0.02em;
+}
+
+/* ==========================================================================
+   Dark Mode
+   ========================================================================== */
+
+body.dark {
+  --bg-deep: #0f1117;
+  --bg-base: #1a1d27;
+  --bg-surface: rgba(26, 29, 39, 0.88);
+  --bg-surface-elevated: rgba(30, 34, 46, 0.96);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border-light: rgba(255, 255, 255, 0.1);
+  --border-glow: rgba(99, 102, 241, 0.3);
+  --shadow-premium: 0 14px 36px rgba(0, 0, 0, 0.4);
+  background-color: var(--bg-deep);
+  background-image:
+    radial-gradient(at 0% 0%, rgba(79, 70, 229, 0.12) 0px, transparent 45%),
+    radial-gradient(at 100% 100%, rgba(8, 145, 178, 0.10) 0px, transparent 45%),
+    linear-gradient(180deg, #0f1117 0%, #13161f 100%);
+}
+
+body.dark .glass-panel {
+  background: rgba(26, 29, 39, 0.82);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+body.dark .apikey-input-wrapper,
+body.dark .btn-theme {
+  background: rgba(26, 29, 39, 0.9);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+body.dark .select-custom,
+body.dark .rich-textarea,
+body.dark .upload-zone {
+  background: rgba(26, 29, 39, 0.8);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+body.dark .chip {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+}
+
+body.dark .chip.active {
+  background: rgba(79, 70, 229, 0.25);
+  border-color: rgba(79, 70, 229, 0.5);
+  color: #a5b4fc;
 }

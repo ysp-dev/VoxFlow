@@ -87,37 +87,6 @@ const DIGIT_PRONUNCIATIONS = {
   '9': '구'
 };
 
-const KOREAN_SMALL_NUMBER_VALUES = {
-  공: '0',
-  영: '0',
-  일: '1',
-  한: '1',
-  하나: '1',
-  이: '2',
-  두: '2',
-  둘: '2',
-  삼: '3',
-  세: '3',
-  셋: '3',
-  사: '4',
-  네: '4',
-  넷: '4',
-  오: '5',
-  다섯: '5',
-  육: '6',
-  여섯: '6',
-  칠: '7',
-  일곱: '7',
-  팔: '8',
-  여덟: '8',
-  구: '9',
-  아홉: '9',
-  십: '10',
-  열: '10'
-};
-
-const SOURCE_NUMBER_UNITS = '년|개월|월|일|회|건|개|명|차|단계|번|분|초|시간|원|달러|퍼센트';
-
 const NATIVE_KOREAN_COUNTER_ONES = {
   1: '한',
   2: '두',
@@ -622,18 +591,8 @@ function getDigitByDigitCodePronunciation(value) {
   return prefix + digits;
 }
 
-function addSourceNumberUnitParentheticals(text) {
-  const unitPattern = SOURCE_NUMBER_UNITS;
-  const pattern = new RegExp(`(^|[^가-힣\\d(（])(${Object.keys(KOREAN_SMALL_NUMBER_VALUES).join('|')})\\s+(${unitPattern})(?!\\s*[)）])(?!(?:\\s*[\\(（][^\\n\\)）]*[\\)）]))`, 'g');
-  return String(text || '').replace(pattern, (match, prefix, numberWord, unit) => {
-    const value = KOREAN_SMALL_NUMBER_VALUES[numberWord];
-    if (!value) return match;
-    return `${prefix}${numberWord} ${unit}(${value}${unit})`;
-  });
-}
-
 function normalizeEnglishPronunciationParentheticals(text) {
-  return addSourceNumberUnitParentheticals(String(text || '')
+  return String(text || '')
     .replace(/([가-힣]{1,12}(?:\s+[가-힣]{1,12})?)\s*[\(（]\s*(MT\d{2,6})\s*[\)）]/gi, (match, hangul, code) => {
       const preferred = getDigitByDigitCodePronunciation(code);
       if (!preferred) return match;
@@ -643,7 +602,7 @@ function normalizeEnglishPronunciationParentheticals(text) {
       const preferred = getDigitByDigitCodePronunciation(english) || getAcronymPronunciation(english) || ENGLISH_PRONUNCIATION_OVERRIDES[english.toLowerCase()];
       if (!preferred) return match;
       return `${preferred}(${english})`;
-    }));
+    });
 }
 
 function getLectureWeekNumber(value) {

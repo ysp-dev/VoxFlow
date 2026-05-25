@@ -1892,6 +1892,8 @@ class QueueManager {
     if (this.mediaAudio) return;
 
     this.setStatus('generating');
+    const primedAudio = this._primedAudio;
+    this._primedAudio = null;
     this._destroyStableMedia();
 
     if (!this.generationAbortController) {
@@ -1925,8 +1927,7 @@ class QueueManager {
 
     this.setStatus('buffering');
     const { blob, segmentStarts, duration } = createWavBlobFromAudioBuffers(audioBuffers);
-    const audio = this._primedAudio || new Audio();
-    this._primedAudio = null;
+    const audio = primedAudio || new Audio();
     audio.preload = 'auto';
     audio.playsInline = true;
     audio.setAttribute('playsinline', '');

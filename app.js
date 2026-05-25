@@ -1580,19 +1580,33 @@ class QueueManager {
 
   primeForAutoplay() {
     this.initAudio();
-    if (!this.audioCtx || !this.gainNode) return;
 
-    try {
-      const buffer = this.audioCtx.createBuffer(1, 1, this.audioCtx.sampleRate);
-      const source = this.audioCtx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(this.gainNode);
-      source.onended = () => {
-        try { source.disconnect(); } catch {}
-      };
-      source.start(0);
-    } catch {
-      // If silent priming is blocked, the normal play button remains the fallback.
+    // Prime Web Audio API context (일반 모드)
+    if (this.audioCtx && this.gainNode) {
+      try {
+        const buffer = this.audioCtx.createBuffer(1, 1, this.audioCtx.sampleRate);
+        const source = this.audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.gainNode);
+        source.onended = () => {
+          try { source.disconnect(); } catch {}
+        };
+        source.start(0);
+      } catch {
+        // If silent priming is blocked, the normal play button remains the fallback.
+      }
+    }
+
+    // Prime HTML5 Audio (차량 블루투스 모드) — autoplay 정책은 Web Audio와 별개
+    if (this.useStablePlayback) {
+      try {
+        const silentWav = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+        const primer = new Audio(silentWav);
+        primer.volume = 0;
+        primer.play().catch(() => {});
+      } catch {
+        // Priming blocked; user will need to tap play manually.
+      }
     }
   }
 

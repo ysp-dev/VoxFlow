@@ -7,7 +7,12 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function fallbackCopyText(text, baseName = 'voxflow-script') {
+function fallbackCopyText(
+  text,
+  baseName = 'voxflow-script',
+  successMessage = '대본이 클립보드에 복사되었습니다.',
+  downloadMessage = '클립보드 접근 불가 — 텍스트 파일로 저장했습니다.'
+) {
   let copied = false;
   try {
     const ta = document.createElement('textarea');
@@ -20,11 +25,11 @@ function fallbackCopyText(text, baseName = 'voxflow-script') {
   } catch { /* fall through */ }
 
   if (copied) {
-    showNotification('대본이 클립보드에 복사되었습니다.', 'success');
+    showNotification(successMessage, 'success');
   } else {
     const title = (baseName || 'voxflow-script').replace(/[^\w가-힣]/g, '_');
     downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), `${title}.txt`);
-    showNotification('클립보드 접근 불가 — 텍스트 파일로 저장했습니다.', 'success');
+    showNotification(downloadMessage, 'success');
   }
 }
 
@@ -192,6 +197,8 @@ const elements = {
 };
 
 let currentViewMode = 'preview'; // 'preview' | 'playlist'
+const diagnosticEntries = [];
+let diagnosticLogEl = null;
 
 /**
  * Initialize VoxFlow Web Application.
@@ -201,6 +208,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
   setupUploadZone();
   setupSettings();
+  setupDiagnostics();
   setupPlayerControls();
   setupQueueListeners();
   setupTextareaCounter();
@@ -625,6 +633,81 @@ function setupSettings() {
   });
 
   syncConfig();
+}
+
+/* ==========================================================================
+   In-app audio diagnostics for mobile Bluetooth / CarPlay checks
+   ========================================================================== */
+
+function formatDiagnosticEntry(entry) {
+  const snapshot = entry.snapshot || {};
+  const details = entry.details && Object.keys(entry.details).length
+    ? ' ' + Object.entries(entry.details).map(([key, value]) => `${key}=${value}`).join(' ')
+    : '';
+  const audioSession = snapshot.audioSession || '-';
+  return `${entry.time} ${entry.event}${details} | st=${snapshot.status} idx=${snapshot.index} t=${snapshot.currentTime}/${snapshot.duration} paused=${snapshot.paused} rs=${snapshot.readyState} ns=${snapshot.networkState} vis=${snapshot.visibility} as=${audioSession} intent=${snapshot.pauseIntent}`;
+}
+
+function appendDiagnosticEntry(entry) {
+  if (!diagnosticLogEl) return;
+  diagnosticEntries.push(entry);
+  if (diagnosticEntries.length > 40) diagnosticEntries.shift();
+  diagnosticLogEl.textContent = diagnosticEntries.map(formatDiagnosticEntry).join('\n') || '대기 중';
+  diagnosticLogEl.scrollTop = diagnosticLogEl.scrollHeight;
+}
+
+function setupDiagnostics() {
+  const anchor = document.querySelector('.autoplay-row');
+  if (!anchor) return;
+
+  const panel = document.createElement('div');
+  panel.className = 'diagnostic-panel';
+  panel.innerHTML = `
+    <div class="diagnostic-header">
+      <span>차량 로그</span>
+      <div class="diagnostic-actions">
+        <button id="btn-copy-diagnostics" class="btn btn-secondary btn-sm" type="button">복사</button>
+        <button id="btn-clear-diagnostics" class="btn btn-secondary btn-sm" type="button">삭제</button>
+      </div>
+    </div>
+    <pre id="diagnostic-log" class="diagnostic-log">대기 중</pre>
+  `;
+  anchor.insertAdjacentElement('afterend', panel);
+
+  diagnosticLogEl = panel.querySelector('#diagnostic-log');
+  panel.querySelector('#btn-copy-diagnostics')?.addEventListener('click', () => {
+    const text = diagnosticEntries.map(formatDiagnosticEntry).join('\n');
+    if (!text) {
+      showNotification('복사할 차량 로그가 없습니다.', 'warning');
+      return;
+    }
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => showNotification('차량 로그가 클립보드에 복사되었습니다.', 'success'),
+        () => fallbackCopyText(
+          text,
+          'voxflow-car-audio-log',
+          '차량 로그가 클립보드에 복사되었습니다.',
+          '클립보드 접근 불가 — 차량 로그 파일로 저장했습니다.'
+        )
+      );
+    } else {
+      fallbackCopyText(
+        text,
+        'voxflow-car-audio-log',
+        '차량 로그가 클립보드에 복사되었습니다.',
+        '클립보드 접근 불가 — 차량 로그 파일로 저장했습니다.'
+      );
+    }
+  });
+  panel.querySelector('#btn-clear-diagnostics')?.addEventListener('click', () => {
+    diagnosticEntries.length = 0;
+    if (diagnosticLogEl) diagnosticLogEl.textContent = '대기 중';
+  });
+
+  queue.addEventListener('diagnostic', appendDiagnosticEntry);
+  queue.getDiagnostics().forEach(appendDiagnosticEntry);
+  queue.recordDiagnostic('diagnostic-ui-ready');
 }
 
 /* ==========================================================================
@@ -1299,8 +1382,13 @@ function stopSilentWakeAudio() {
   }
 }
 
+function shouldUseSilentWakeAudio() {
+  return !(queue.useStablePlayback && queue.hasActiveAudioFocus());
+}
+
 function startWakeFallback() {
   const video = ensureWakeFallbackVideo();
+  const shouldLogStart = Boolean((wakeFallbackPaint && !wakeFallbackTimer) || (video && video.paused));
   if (wakeFallbackPaint && !wakeFallbackTimer) {
     wakeFallbackPaint();
     wakeFallbackTimer = setInterval(wakeFallbackPaint, 1000);
@@ -1308,10 +1396,22 @@ function startWakeFallback() {
   if (video && video.paused) {
     video.play().catch(() => {});
   }
-  startSilentWakeAudio();
+  const useSilentAudio = shouldUseSilentWakeAudio();
+  if (shouldLogStart) {
+    queue.recordDiagnostic('wake:fallback-start', { silentAudio: useSilentAudio });
+  }
+  if (useSilentAudio) {
+    startSilentWakeAudio();
+  } else {
+    stopSilentWakeAudio();
+  }
 }
 
 function stopWakeFallback() {
+  const hadFallback = Boolean(wakeFallbackVideo || wakeFallbackTimer || silentWakeSource);
+  if (hadFallback) {
+    queue.recordDiagnostic('wake:fallback-stop');
+  }
   if (wakeFallbackVideo && !wakeFallbackVideo.paused) {
     wakeFallbackVideo.pause();
   }
@@ -1383,8 +1483,10 @@ function updateWakeLock() {
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
+    queue.recordDiagnostic('visibility:hidden');
     stopVisualizer();
   } else {
+    queue.recordDiagnostic('visibility:visible');
     // 화면 복귀 시 AudioContext 재개 (화면 잠금 후 복귀 대응)
     if (queue.audioCtx?.state === 'suspended') {
       queue.audioCtx.resume().catch(() => {});

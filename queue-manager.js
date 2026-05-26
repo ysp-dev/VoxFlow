@@ -149,6 +149,11 @@ function requestPlaybackAudioSession() {
   }
 }
 
+const STABLE_RECOVERY_MAX_ATTEMPTS = 4;
+const STABLE_RECOVERY_BASE_DELAY_MS = 700;
+const STABLE_PROGRESS_STALL_MS = 4500;
+const STABLE_PROGRESS_EPSILON = 0.04;
+
 /**
  * ==========================================================================
  * VoxFlow - Web Audio API & Playback Queue Manager Module
@@ -193,6 +198,13 @@ class QueueManager {
     this.mediaSegmentStarts = [];
     this.mediaDuration = 0;
     this.mediaActiveIndex = -1;
+    this.stableMediaCleanup = null;
+    this.stableRecoveryTimer = null;
+    this.stableRecoveryAttempts = 0;
+    this.stablePauseIntent = 'idle';
+    this.stableLastProgressAt = 0;
+    this.stableLastCurrentTime = 0;
+    this.diagnostics = [];
 
     // API configuration for prefetching
     this.apiConfig = {
@@ -205,7 +217,8 @@ class QueueManager {
       statusChange: [],
       segmentStart: [],
       progress: [],
-      stateUpdate: []
+      stateUpdate: [],
+      diagnostic: []
     };
     
     this.progressInterval = null;
@@ -357,6 +370,63 @@ class QueueManager {
     }
   }
 
+  getDiagnostics() {
+    return [...this.diagnostics];
+  }
+
+  recordDiagnostic(event, details = {}) {
+    this._logDiagnostic(event, details);
+  }
+
+  _getMediaSnapshot() {
+    const audio = this.mediaAudio;
+    const duration = this.mediaDuration || audio?.duration || 0;
+    let audioSessionType = '';
+    try {
+      audioSessionType = navigator.audioSession?.type || '';
+    } catch {
+      audioSessionType = '';
+    }
+
+    return {
+      status: this.status,
+      stable: this.useStablePlayback,
+      playing: this.isPlaying,
+      index: `${this.currentIndex + 1}/${this.segments.length || 0}`,
+      currentTime: Number.isFinite(audio?.currentTime) ? Number(audio.currentTime.toFixed(2)) : 0,
+      duration: Number.isFinite(duration) ? Number(duration.toFixed(2)) : 0,
+      paused: audio ? audio.paused : null,
+      ended: audio ? audio.ended : null,
+      readyState: audio ? audio.readyState : null,
+      networkState: audio ? audio.networkState : null,
+      audioCtx: this.audioCtx?.state || '',
+      visibility: document.visibilityState,
+      hidden: document.hidden,
+      audioSession: audioSessionType,
+      pauseIntent: this.stablePauseIntent
+    };
+  }
+
+  _logDiagnostic(event, details = {}) {
+    const entry = {
+      time: new Date().toLocaleTimeString('ko-KR', { hour12: false }),
+      event,
+      details,
+      snapshot: this._getMediaSnapshot()
+    };
+
+    this.diagnostics.push(entry);
+    if (this.diagnostics.length > 80) this.diagnostics.shift();
+
+    try {
+      console.debug('[VoxFlow audio]', entry);
+    } catch {
+      // Console logging is diagnostic-only.
+    }
+
+    this.emit('diagnostic', entry);
+  }
+
   /**
    * Set speech segments.
    */
@@ -386,6 +456,7 @@ class QueueManager {
     if (this.useStablePlayback === nextValue) return;
     this.stop();
     this.useStablePlayback = nextValue;
+    this._logDiagnostic('stable-mode', { enabled: nextValue });
   }
 
   releaseDistantAudioBuffers(centerIndex = this.currentIndex) {
@@ -471,6 +542,9 @@ class QueueManager {
         return;
       }
       this.isPlaying = false;
+      this.stablePauseIntent = 'user';
+      this._cancelStableRecovery('user-pause');
+      this._logDiagnostic('stable:user-pause');
       this.setStatus('paused');
       this.mediaAudio.pause();
       this.pausedAt = Math.max(0, this.mediaAudio.currentTime - (this.mediaSegmentStarts[this.currentIndex] || 0));
@@ -498,6 +572,8 @@ class QueueManager {
   stop(options = {}) {
     const { preservePrimedAudio = false } = options;
     this.isPlaying = false;
+    this.stablePauseIntent = 'stop';
+    this._cancelStableRecovery('stop');
     this._clearPreScheduled();
     this.nextScheduledTime = 0;
     this._destroyStableMedia({ preservePrimedAudio });
@@ -554,13 +630,24 @@ class QueueManager {
     if (this.useStablePlayback && this.mediaAudio) {
       this.currentIndex = index;
       this.pausedAt = 0;
+      this.stablePauseIntent = 'seek';
+      this._cancelStableRecovery('seek');
       this.mediaAudio.currentTime = this.mediaSegmentStarts[index] || 0;
       this.emit('segmentStart', index);
       this.emit('progress', this.mediaAudio.currentTime, this.mediaDuration || this.mediaAudio.duration || 1);
       if (this.isPlaying) {
-        this.mediaAudio.play().catch(() => {});
+        this.stablePauseIntent = 'programmatic-play';
+        this.mediaAudio.play()
+          .then(() => {
+            this.stablePauseIntent = 'playing';
+            this.setStatus('playing');
+            this.startStableProgressTracking();
+          })
+          .catch((err) => {
+            this._logDiagnostic('stable:jump-play-failed', { message: err.message });
+            this._scheduleStableRecovery('jump-play-failed');
+          });
         this.setStatus('playing');
-        this.startStableProgressTracking();
       }
       return;
     }
@@ -590,6 +677,8 @@ class QueueManager {
 
     this.isPlaying = true;
     this._clearPreScheduled();
+    this._cancelStableRecovery('play-request');
+    this._logDiagnostic('stable:play-request');
 
     if (!this.mediaAudio) {
       try {
@@ -615,10 +704,15 @@ class QueueManager {
     requestPlaybackAudioSession();
 
     try {
+      this.stablePauseIntent = 'programmatic-play';
       await this.mediaAudio.play();
+      this.stablePauseIntent = 'playing';
       if (this._primedAudio && this._primedAudio !== this.mediaAudio) {
         this._clearPrimedAudio();
       }
+      this.stableRecoveryAttempts = 0;
+      this.stableLastProgressAt = Date.now();
+      this.stableLastCurrentTime = this.mediaAudio.currentTime || 0;
       this.setStatus('playing');
       this.startStableProgressTracking();
     } catch (err) {
@@ -626,6 +720,8 @@ class QueueManager {
         this._clearPrimedAudio();
       }
       this.isPlaying = false;
+      this.stablePauseIntent = 'blocked';
+      this._logDiagnostic('stable:play-blocked', { message: err.message });
       this.setStatus('paused');
       showNotification('브라우저가 자동 재생을 막았습니다. 재생 버튼을 한 번 더 눌러주세요.', 'warning');
     }
@@ -699,19 +795,20 @@ class QueueManager {
       }
       audio.volume = this.volume;
       audio.playbackRate = this.playbackRate;
-      audio.addEventListener('ended', () => this._handleStableEnded());
-      audio.addEventListener('error', () => {
-        if (!this.isPlaying) return;
-        this.isPlaying = false;
-        this.setStatus('idle');
-        showNotification('차량 모드 오디오 재생 중 오류가 발생했습니다.', 'error');
-      });
 
       this.mediaAudio = audio;
       this.mediaObjectUrl = nextMediaObjectUrl;
       this.mediaSegmentStarts = segmentStarts;
       this.mediaDuration = duration;
       this.mediaActiveIndex = -1;
+      this.stableLastProgressAt = Date.now();
+      this.stableLastCurrentTime = 0;
+      this.stablePauseIntent = 'prepared';
+      this._bindStableMedia(audio);
+      this._logDiagnostic('stable:prepared', {
+        segments: this.segments.length,
+        duration: Number(duration.toFixed(2))
+      });
       nextMediaObjectUrl = null;
     } catch (err) {
       if (primedAudio) {
@@ -884,6 +981,10 @@ class QueueManager {
     if (!preservePrimedAudio) {
       this._clearPrimedAudio();
     }
+    this._cancelStableRecovery('destroy-media');
+    if (this.stableMediaCleanup) {
+      this.stableMediaCleanup();
+    }
     if (this.mediaAudio) {
       this.mediaAudio.pause();
       this.mediaAudio.removeAttribute('src');
@@ -897,6 +998,8 @@ class QueueManager {
     this.mediaSegmentStarts = [];
     this.mediaDuration = 0;
     this.mediaActiveIndex = -1;
+    this.stableLastProgressAt = 0;
+    this.stableLastCurrentTime = 0;
   }
 
   _clearPrimedAudio() {
@@ -923,6 +1026,153 @@ class QueueManager {
 
   _getStableSegmentEnd(index) {
     return this.mediaSegmentStarts[index + 1] ?? this.mediaDuration;
+  }
+
+  _bindStableMedia(audio) {
+    if (this.stableMediaCleanup) {
+      this.stableMediaCleanup();
+    }
+
+    const events = [
+      'loadstart', 'loadedmetadata', 'canplay', 'canplaythrough',
+      'play', 'playing', 'pause', 'waiting', 'stalled', 'suspend',
+      'seeking', 'seeked', 'ended', 'error', 'abort'
+    ];
+    const bindings = events.map((eventName) => {
+      const handler = () => this._handleStableMediaEvent(eventName);
+      audio.addEventListener(eventName, handler);
+      return { eventName, handler };
+    });
+
+    this.stableMediaCleanup = () => {
+      bindings.forEach(({ eventName, handler }) => {
+        audio.removeEventListener(eventName, handler);
+      });
+      this.stableMediaCleanup = null;
+    };
+  }
+
+  _handleStableMediaEvent(eventName) {
+    this._logDiagnostic(`media:${eventName}`);
+
+    if (eventName === 'playing') {
+      this.stablePauseIntent = 'playing';
+      this.stableRecoveryAttempts = 0;
+      this.stableLastProgressAt = Date.now();
+      this.stableLastCurrentTime = this.mediaAudio?.currentTime || 0;
+      this._cancelStableRecovery('media-playing');
+      return;
+    }
+
+    if (eventName === 'ended') {
+      this.stablePauseIntent = 'ended';
+      this._cancelStableRecovery('media-ended');
+      this._handleStableEnded();
+      return;
+    }
+
+    if (eventName === 'error') {
+      this._cancelStableRecovery('media-error');
+      if (!this.isPlaying) return;
+      this.isPlaying = false;
+      this.stablePauseIntent = 'error';
+      this.setStatus('idle');
+      showNotification('차량 모드 오디오 재생 중 오류가 발생했습니다.', 'error');
+      return;
+    }
+
+    if (eventName === 'pause') {
+      if (this._shouldRecoverStablePlayback()) {
+        this._scheduleStableRecovery('unexpected-pause', 350);
+      }
+      return;
+    }
+
+    if (eventName === 'waiting' || eventName === 'stalled') {
+      if (this._shouldRecoverStablePlayback()) {
+        this._scheduleStableRecovery(eventName, 1200);
+      }
+    }
+  }
+
+  _shouldRecoverStablePlayback() {
+    if (!this.useStablePlayback || !this.isPlaying || !this.mediaAudio) return false;
+    if (['user', 'stop', 'ended', 'error', 'blocked'].includes(this.stablePauseIntent)) return false;
+    if (this.mediaAudio.ended) return false;
+
+    const duration = this.mediaDuration || this.mediaAudio.duration || 0;
+    if (Number.isFinite(duration) && duration > 0 && this.mediaAudio.currentTime >= duration - 0.35) {
+      return false;
+    }
+
+    return true;
+  }
+
+  _cancelStableRecovery(reason = '') {
+    if (!this.stableRecoveryTimer) return;
+    clearTimeout(this.stableRecoveryTimer);
+    this.stableRecoveryTimer = null;
+    this._logDiagnostic('stable:recovery-cancel', { reason });
+  }
+
+  _scheduleStableRecovery(reason, delayMs = STABLE_RECOVERY_BASE_DELAY_MS) {
+    if (!this._shouldRecoverStablePlayback()) return;
+    if (this.stableRecoveryTimer) return;
+
+    if (this.stableRecoveryAttempts >= STABLE_RECOVERY_MAX_ATTEMPTS) {
+      this.isPlaying = false;
+      this.stablePauseIntent = 'recovery-exhausted';
+      this.setStatus('paused');
+      this.stopProgressTracking();
+      this._logDiagnostic('stable:recovery-exhausted', { reason });
+      showNotification('차량 오디오가 반복해서 멈췄습니다. 재생 버튼을 다시 눌러주세요.', 'warning');
+      return;
+    }
+
+    const nextDelay = delayMs + (this.stableRecoveryAttempts * 500);
+    this._logDiagnostic('stable:recovery-scheduled', { reason, delayMs: nextDelay });
+    this.stableRecoveryTimer = setTimeout(() => {
+      this.stableRecoveryTimer = null;
+      this._recoverStablePlayback(reason);
+    }, nextDelay);
+  }
+
+  async _recoverStablePlayback(reason) {
+    if (!this._shouldRecoverStablePlayback()) return;
+
+    this.stableRecoveryAttempts++;
+    this._logDiagnostic('stable:recovery-start', {
+      reason,
+      attempt: this.stableRecoveryAttempts
+    });
+
+    try {
+      requestPlaybackAudioSession();
+      if (this.audioCtx?.state === 'suspended') {
+        await this.audioCtx.resume();
+      }
+
+      if (!this.mediaAudio) return;
+      this.mediaAudio.volume = this.volume;
+      this.mediaAudio.playbackRate = this.playbackRate;
+      this.stablePauseIntent = 'recovery-play';
+      await this.mediaAudio.play();
+      this.stablePauseIntent = 'playing';
+      this.stableLastProgressAt = Date.now();
+      this.stableLastCurrentTime = this.mediaAudio.currentTime || 0;
+      this.setStatus('playing');
+      this.startStableProgressTracking();
+      this._logDiagnostic('stable:recovery-success', {
+        attempt: this.stableRecoveryAttempts
+      });
+    } catch (err) {
+      this._logDiagnostic('stable:recovery-failed', {
+        reason,
+        attempt: this.stableRecoveryAttempts,
+        message: err.message
+      });
+      this._scheduleStableRecovery('recovery-failed', STABLE_RECOVERY_BASE_DELAY_MS);
+    }
   }
 
   _handleStableEnded() {
@@ -952,6 +1202,7 @@ class QueueManager {
 
       let current = Math.min(this.mediaAudio.currentTime || 0, this.mediaDuration || this.mediaAudio.duration || 1);
       const duration = this.mediaDuration || this.mediaAudio.duration || 1;
+      const now = Date.now();
 
       if (this.repeatMode === 'one') {
         const start = this.mediaSegmentStarts[this.currentIndex] || 0;
@@ -959,7 +1210,23 @@ class QueueManager {
         if (end > start && current >= end - 0.03) {
           this.mediaAudio.currentTime = start;
           current = start;
+          this.stableLastProgressAt = now;
+          this.stableLastCurrentTime = current;
         }
+      }
+
+      if (!this.mediaAudio.paused && current > this.stableLastCurrentTime + STABLE_PROGRESS_EPSILON) {
+        this.stableLastProgressAt = now;
+        this.stableLastCurrentTime = current;
+      } else if (
+        !this.mediaAudio.paused &&
+        duration - current > 1.2 &&
+        now - this.stableLastProgressAt > STABLE_PROGRESS_STALL_MS
+      ) {
+        this.stableLastProgressAt = now;
+        this._scheduleStableRecovery('progress-stalled', 0);
+      } else if (this.mediaAudio.paused && this._shouldRecoverStablePlayback()) {
+        this._scheduleStableRecovery('progress-paused', 250);
       }
 
       const activeIndex = this._getStableSegmentIndex(current);

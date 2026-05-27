@@ -96,6 +96,38 @@ function createWavBlobFromAudioBuffers(audioBuffers, gapSeconds = INTER_CHUNK_PA
   };
 }
 
+function createMp3BlobFromAudioBuffers(mp3Buffers, audioBuffers) {
+  if (!mp3Buffers.length || mp3Buffers.length !== audioBuffers.length) {
+    throw new Error('연속 재생용 MP3 오디오가 없습니다.');
+  }
+
+  const segmentStarts = [];
+  let duration = 0;
+  let totalBytes = 0;
+
+  for (let i = 0; i < mp3Buffers.length; i++) {
+    segmentStarts.push(duration);
+    duration += audioBuffers[i]?.duration || 0;
+    totalBytes += mp3Buffers[i].byteLength || 0;
+  }
+
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const buffer of mp3Buffers) {
+    const bytes = new Uint8Array(buffer);
+    merged.set(bytes, offset);
+    offset += bytes.byteLength;
+  }
+
+  return {
+    blob: new Blob([merged], { type: 'audio/mpeg' }),
+    segmentStarts,
+    duration,
+    bytes: totalBytes,
+    format: 'mp3'
+  };
+}
+
 function createAudioFocusWavBlob(durationSeconds = 0.14, sampleRate = 8000) {
   const frameCount = Math.max(1, Math.floor(durationSeconds * sampleRate));
   const bytesPerSample = 2;
@@ -437,6 +469,7 @@ class QueueManager {
       ...seg,
       ttsText: seg.ttsText || getNarrationText(seg.text),
       audioBuffer: null,
+      audioArrayBuffer: null,
       state: 'idle', // 'idle' | 'generating' | 'ready' | 'error'
       errorMsg: null
     }));
@@ -750,37 +783,54 @@ class QueueManager {
       const { signal } = this.generationAbortController;
       const capturedVersion = this.queueVersion;
       const audioBuffers = [];
+      const mp3Buffers = [];
 
       for (let i = 0; i < this.segments.length; i++) {
         if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
         if (this.queueVersion !== capturedVersion) throw new DOMException('Aborted', 'AbortError');
 
         const segment = this.segments[i];
-        if (!segment.audioBuffer) {
+        const needsSpeech = !segment.audioArrayBuffer;
+        const needsDecode = !segment.audioBuffer;
+        if (needsSpeech || needsDecode) {
           segment.state = 'generating';
           this.emit('stateUpdate', this.segments);
+        }
 
+        if (needsSpeech) {
           const result = await generateSpeech(segment.ttsText || segment.text, { ...this.apiConfig, signal });
           if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
           if (this.queueVersion !== capturedVersion) throw new DOMException('Aborted', 'AbortError');
 
-          segment.audioBuffer = await this.decodeAudio(result.arrayBuffer);
+          segment.audioArrayBuffer = result.arrayBuffer;
+        }
+
+        if (needsDecode) {
+          segment.audioBuffer = await this.decodeAudio(segment.audioArrayBuffer);
+        }
+
+        if (needsSpeech || needsDecode) {
           segment.state = 'ready';
           segment.errorMsg = null;
           this.emit('stateUpdate', this.segments);
         }
         audioBuffers.push(segment.audioBuffer);
+        mp3Buffers.push(segment.audioArrayBuffer);
       }
 
       this.setStatus('buffering');
       requestPlaybackAudioSession();
-      const { blob, segmentStarts, duration } = createWavBlobFromAudioBuffers(audioBuffers);
       const audio = primedAudio || new Audio();
       audio.preload = 'auto';
       audio.playsInline = true;
       audio.setAttribute('playsinline', '');
       audio.setAttribute('webkit-playsinline', '');
       audio.loop = false;
+      const canUseMp3 = typeof audio.canPlayType === 'function' && audio.canPlayType('audio/mpeg') !== '';
+      const media = canUseMp3
+        ? createMp3BlobFromAudioBuffers(mp3Buffers, audioBuffers)
+        : { ...createWavBlobFromAudioBuffers(audioBuffers), bytes: null, format: 'wav' };
+      const { blob, segmentStarts, duration } = media;
       nextMediaObjectUrl = URL.createObjectURL(blob);
       if (primedAudio) {
         try {
@@ -807,7 +857,9 @@ class QueueManager {
       this._bindStableMedia(audio);
       this._logDiagnostic('stable:prepared', {
         segments: this.segments.length,
-        duration: Number(duration.toFixed(2))
+        duration: Number(duration.toFixed(2)),
+        format: media.format,
+        bytes: media.bytes
       });
       nextMediaObjectUrl = null;
     } catch (err) {
@@ -896,7 +948,8 @@ class QueueManager {
 
     try {
       const result = await generateSpeech(segment.ttsText || segment.text, { ...this.apiConfig, signal });
-      const audioBuffer = await this.decodeAudio(result.arrayBuffer);
+      segment.audioArrayBuffer = result.arrayBuffer;
+      const audioBuffer = await this.decodeAudio(segment.audioArrayBuffer);
 
       segment.audioBuffer = audioBuffer;
       segment.state = 'ready';
@@ -954,7 +1007,8 @@ class QueueManager {
         try {
           const result = await generateSpeech(segment.ttsText || segment.text, { ...this.apiConfig, signal });
           if (this.queueVersion !== capturedVersion) return;
-          segment.audioBuffer = await this.decodeAudio(result.arrayBuffer);
+          segment.audioArrayBuffer = result.arrayBuffer;
+          segment.audioBuffer = await this.decodeAudio(segment.audioArrayBuffer);
           segment.state = 'ready';
           this.releaseDistantAudioBuffers(nextIndex);
           this._tryPreSchedule(nextIndex, segment.audioBuffer);

@@ -131,6 +131,7 @@ function flushAudioBuffers() {
     queue.stop();
     queue.segments.forEach(seg => {
       seg.audioBuffer = null;
+      seg.audioArrayBuffer = null;
       if (seg.state === 'ready' || seg.state === 'generating') seg.state = 'idle';
     });
     queue.emit('stateUpdate', queue.segments);
@@ -197,6 +198,9 @@ const elements = {
 };
 
 let currentViewMode = 'preview'; // 'preview' | 'playlist'
+const DIAGNOSTIC_STORAGE_KEY = 'voxflow_car_audio_diagnostics_v1';
+const DIAGNOSTIC_ENTRY_LIMIT = 80;
+const DIAGNOSTIC_VISIBLE_LIMIT = 40;
 const diagnosticEntries = [];
 let diagnosticLogEl = null;
 
@@ -648,12 +652,38 @@ function formatDiagnosticEntry(entry) {
   return `${entry.time} ${entry.event}${details} | st=${snapshot.status} idx=${snapshot.index} t=${snapshot.currentTime}/${snapshot.duration} paused=${snapshot.paused} rs=${snapshot.readyState} ns=${snapshot.networkState} vis=${snapshot.visibility} as=${audioSession} intent=${snapshot.pauseIntent}`;
 }
 
+function loadPersistedDiagnosticEntries() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DIAGNOSTIC_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(entry => entry && entry.event) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistDiagnosticEntries() {
+  try {
+    localStorage.setItem(DIAGNOSTIC_STORAGE_KEY, JSON.stringify(diagnosticEntries.slice(-DIAGNOSTIC_ENTRY_LIMIT)));
+  } catch {
+    // Diagnostics should never interfere with playback.
+  }
+}
+
+function renderDiagnosticEntries() {
+  if (!diagnosticLogEl) return;
+  diagnosticLogEl.textContent = diagnosticEntries
+    .slice(-DIAGNOSTIC_VISIBLE_LIMIT)
+    .map(formatDiagnosticEntry)
+    .join('\n') || '대기 중';
+  diagnosticLogEl.scrollTop = diagnosticLogEl.scrollHeight;
+}
+
 function appendDiagnosticEntry(entry) {
   if (!diagnosticLogEl) return;
   diagnosticEntries.push(entry);
-  if (diagnosticEntries.length > 40) diagnosticEntries.shift();
-  diagnosticLogEl.textContent = diagnosticEntries.map(formatDiagnosticEntry).join('\n') || '대기 중';
-  diagnosticLogEl.scrollTop = diagnosticLogEl.scrollHeight;
+  while (diagnosticEntries.length > DIAGNOSTIC_ENTRY_LIMIT) diagnosticEntries.shift();
+  persistDiagnosticEntries();
+  renderDiagnosticEntries();
 }
 
 function setupDiagnostics() {
@@ -675,6 +705,9 @@ function setupDiagnostics() {
   anchor.insertAdjacentElement('afterend', panel);
 
   diagnosticLogEl = panel.querySelector('#diagnostic-log');
+  diagnosticEntries.push(...loadPersistedDiagnosticEntries().slice(-DIAGNOSTIC_ENTRY_LIMIT));
+  renderDiagnosticEntries();
+
   panel.querySelector('#btn-copy-diagnostics')?.addEventListener('click', () => {
     const text = diagnosticEntries.map(formatDiagnosticEntry).join('\n');
     if (!text) {
@@ -702,7 +735,12 @@ function setupDiagnostics() {
   });
   panel.querySelector('#btn-clear-diagnostics')?.addEventListener('click', () => {
     diagnosticEntries.length = 0;
-    if (diagnosticLogEl) diagnosticLogEl.textContent = '대기 중';
+    try {
+      localStorage.removeItem(DIAGNOSTIC_STORAGE_KEY);
+    } catch {
+      // Ignore storage failures.
+    }
+    renderDiagnosticEntries();
   });
 
   queue.addEventListener('diagnostic', appendDiagnosticEntry);
@@ -1521,6 +1559,7 @@ document.addEventListener('click', () => {
 }, { once: false, passive: true });
 
 window.addEventListener('pagehide', () => {
+  queue.recordDiagnostic('pagehide');
   stopVisualizer();
   stopWakeFallback();
 });

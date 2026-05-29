@@ -128,6 +128,88 @@ function createMp3BlobFromAudioBuffers(mp3Buffers, audioBuffers) {
   };
 }
 
+const STABLE_PLAYBACK_LEAD_IN_SECONDS = 1.4;
+const STABLE_SAFE_WAV_MAX_BYTES = 128 * 1024 * 1024;
+
+function createCarSafeWavBlobFromAudioBuffers(
+  audioBuffers,
+  gapSeconds = INTER_CHUNK_PAUSE_SECONDS,
+  leadInSeconds = STABLE_PLAYBACK_LEAD_IN_SECONDS
+) {
+  if (!audioBuffers.length) {
+    throw new Error('차량 안전 재생용 오디오가 없습니다.');
+  }
+
+  const sampleRate = audioBuffers[0].sampleRate;
+  const numberOfChannels = Math.max(...audioBuffers.map(buffer => buffer.numberOfChannels || 1));
+  const bytesPerSample = 2;
+  const leadInFrames = Math.max(0, Math.round(sampleRate * leadInSeconds));
+  const gapFrames = Math.max(0, Math.round(sampleRate * gapSeconds));
+  const segmentStarts = [];
+
+  let cursorFrames = leadInFrames;
+  for (let i = 0; i < audioBuffers.length; i++) {
+    // Treat the warm-up as part of the first segment so initial playback starts at 0.
+    segmentStarts.push(i === 0 ? 0 : cursorFrames / sampleRate);
+    cursorFrames += audioBuffers[i].length;
+    if (i < audioBuffers.length - 1) cursorFrames += gapFrames;
+  }
+
+  const totalFrames = cursorFrames;
+  const dataSize = totalFrames * numberOfChannels * bytesPerSample;
+  if (dataSize > STABLE_SAFE_WAV_MAX_BYTES) {
+    throw new Error(`차량 안전 WAV가 너무 큽니다. (${Math.round(dataSize / 1024 / 1024)} MB)`);
+  }
+
+  const wavBuffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(wavBuffer);
+
+  writeAsciiString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeAsciiString(view, 8, 'WAVE');
+  writeAsciiString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numberOfChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numberOfChannels * bytesPerSample, true);
+  view.setUint16(32, numberOfChannels * bytesPerSample, true);
+  view.setUint16(34, bytesPerSample * 8, true);
+  writeAsciiString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  let writeOffset = 44 + (leadInFrames * numberOfChannels * bytesPerSample);
+  for (let b = 0; b < audioBuffers.length; b++) {
+    const buffer = audioBuffers[b];
+    const channelData = Array.from({ length: numberOfChannels }, (_, channel) => {
+      const sourceChannel = Math.min(channel, buffer.numberOfChannels - 1);
+      return buffer.getChannelData(sourceChannel);
+    });
+
+    for (let frame = 0; frame < buffer.length; frame++) {
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const sample = Math.max(-1, Math.min(1, channelData[channel][frame] || 0));
+        view.setInt16(writeOffset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        writeOffset += bytesPerSample;
+      }
+    }
+
+    if (b < audioBuffers.length - 1) {
+      writeOffset += gapFrames * numberOfChannels * bytesPerSample;
+    }
+  }
+
+  return {
+    blob: new Blob([wavBuffer], { type: 'audio/wav' }),
+    segmentStarts,
+    duration: totalFrames / sampleRate,
+    bytes: 44 + dataSize,
+    format: 'wav-car',
+    leadInSeconds,
+    gapSeconds
+  };
+}
+
 function createAudioFocusWavBlob(durationSeconds = 0.14, sampleRate = 8000) {
   const frameCount = Math.max(1, Math.floor(durationSeconds * sampleRate));
   const bytesPerSample = 2;
@@ -827,9 +909,15 @@ class QueueManager {
       audio.setAttribute('webkit-playsinline', '');
       audio.loop = false;
       const canUseMp3 = typeof audio.canPlayType === 'function' && audio.canPlayType('audio/mpeg') !== '';
-      const media = canUseMp3
-        ? createMp3BlobFromAudioBuffers(mp3Buffers, audioBuffers)
-        : { ...createWavBlobFromAudioBuffers(audioBuffers), bytes: null, format: 'wav' };
+      let media;
+      try {
+        media = createCarSafeWavBlobFromAudioBuffers(audioBuffers);
+      } catch (err) {
+        this._logDiagnostic('stable:car-wav-fallback', { message: err.message });
+        media = canUseMp3
+          ? createMp3BlobFromAudioBuffers(mp3Buffers, audioBuffers)
+          : { ...createWavBlobFromAudioBuffers(audioBuffers), bytes: null, format: 'wav' };
+      }
       const { blob, segmentStarts, duration } = media;
       nextMediaObjectUrl = URL.createObjectURL(blob);
       if (primedAudio) {
@@ -855,12 +943,15 @@ class QueueManager {
       this.stableLastCurrentTime = 0;
       this.stablePauseIntent = 'prepared';
       this._bindStableMedia(audio);
-      this._logDiagnostic('stable:prepared', {
+      const preparedDetails = {
         segments: this.segments.length,
         duration: Number(duration.toFixed(2)),
         format: media.format,
         bytes: media.bytes
-      });
+      };
+      if (media.leadInSeconds !== undefined) preparedDetails.leadInSeconds = media.leadInSeconds;
+      if (media.gapSeconds !== undefined) preparedDetails.gapSeconds = media.gapSeconds;
+      this._logDiagnostic('stable:prepared', preparedDetails);
       nextMediaObjectUrl = null;
     } catch (err) {
       if (primedAudio) {

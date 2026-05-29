@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f7fb">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>VOXFLOW</title>
+  <meta name="description" content="OpenAI TTS를 활용한 마크다운 문서 음성 변환 웹앱">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div id="ptr-indicator" class="ptr-indicator" aria-hidden="true" aria-label="당겨서 새로고침">
+    <div class="ptr-icon">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <header class="glass-panel">
+      <div class="logo-container"><img class="logo-image logo-image-light" src="assets/voxflow-logo-light.png" alt="VOXFLOW - 텍스트를 오디오로, 생각을 목소리로"><img class="logo-image logo-image-dark" src="assets/voxflow-logo-dark.png" alt="VOXFLOW - 텍스트를 오디오로, 생각을 목소리로"></div>
+      <div class="header-actions"><button id="btn-theme" class="btn-theme" type="button" aria-label="테마 전환"><i data-lucide="moon"></i></button><div id="api-key-wrapper" class="apikey-input-wrapper"><i data-lucide="key-round" style="width:15px;height:15px;flex-shrink:0;color:var(--secondary);"></i><input type="password" id="api-key" class="apikey-input" placeholder="OpenAI API Key 입력..." autocomplete="off" aria-label="OpenAI API Key"><button id="btn-toggle-key-vis" class="apikey-eye-btn" type="button" aria-label="API Key 보기"><i data-lucide="eye" style="width:15px;height:15px;"></i></button></div></div>
+    </header>
+
+    <main class="main-grid">
+      <section class="input-panel glass-panel">
+        <div class="tab-container"><button id="tab-md" class="tab-btn active"><i data-lucide="file-text" style="width: 14px; height: 14px;"></i> Markdown 파일</button><button id="tab-text" class="tab-btn"><i data-lucide="align-left" style="width: 14px; height: 14px;"></i> 직접 텍스트 입력</button></div>
+        <div id="content-md-input" class="tab-content active"><div id="upload-zone" class="upload-zone"><div class="upload-icon"><i data-lucide="cloud-upload" style="width: 32px; height: 32px;"></i></div><h3>마크다운 문서 로드</h3><p>마크다운(.md) 또는 텍스트(.txt) 파일을 이곳에 드래그 앤 드롭하거나 클릭하여 선택하세요.</p><button class="btn btn-secondary">파일 선택</button><input type="file" id="file-input" class="hidden" accept=".md,.txt,text/markdown,text/plain"></div><div id="file-info-card" class="file-info-card hidden"><div class="file-info-details"><i data-lucide="file-check"></i><div><div id="file-name" class="file-name">document.md</div><div id="file-size" class="file-size">1.2 KB</div></div></div><button id="btn-remove-file" class="btn btn-icon btn-remove" title="파일 삭제" aria-label="파일 삭제"><i data-lucide="trash-2" style="width: 16px; height: 16px;"></i></button></div></div>
+        <div id="content-text-input" class="tab-content"><div class="textarea-wrapper"><textarea id="textarea-input" class="rich-textarea" placeholder="음성으로 변환하여 읽어줄 문장이나 문단을 입력하세요..."></textarea><div class="textarea-footer"><span id="char-counter">0 자</span><span>최대 약 20,000자 권장</span></div></div></div>
+        <div class="settings-section"><div class="settings-grid"><div class="form-group"><label for="select-voice">음성 캐릭터</label><select id="select-voice" class="select-custom"><option value="cedar" selected>Cedar (따뜻한, 고품질)</option><option value="marin">Marin (자연스러운, 고품질)</option><option value="alloy">Alloy (균형잡힌, 중성적)</option><option value="ash">Ash (명료한, 또렷함)</option><option value="ballad">Ballad (따뜻한, 감성적)</option><option value="coral">Coral (친근한, 대화체)</option><option value="echo">Echo (깊은, 울림)</option><option value="fable">Fable (표현적, 이야기체)</option><option value="nova">Nova (활기찬, 밝음)</option><option value="onyx">Onyx (묵직한, 권위있는)</option><option value="sage">Sage (차분한, 사려깊은)</option><option value="shimmer">Shimmer (부드러운, 온화함)</option><option value="verse">Verse (표현적, 다채로움)</option></select></div><div class="form-group"><label>말투 프리셋</label><div class="preset-chips"><button class="chip active" data-preset="기본" type="button">기본</button><button class="chip" data-preset="브리핑" type="button">브리핑</button><button class="chip" data-preset="강의" type="button">강의</button><button class="chip" data-preset="오디오북" type="button">오디오북</button><button class="chip" data-preset="차분" type="button">차분</button><button class="chip" data-preset="속독" type="button">속독</button></div></div></div><div class="autoplay-row"><label class="autoplay-label" for="chk-autoplay"><input type="checkbox" id="chk-autoplay" checked> 변환 후 자동 재생</label><label class="autoplay-label" for="chk-stable-playback"><input type="checkbox" id="chk-stable-playback" checked> 차량 블루투스 모드</label></div><div class="cache-manager-row"><span id="cache-count-badge" class="cache-count-badge">캐시 0개</span><button id="btn-clear-cache" class="btn btn-secondary btn-sm" type="button" title="전체 캐시 초기화"><i data-lucide="trash-2" style="width:12px;height:12px;"></i> 전체 초기화</button></div><div class="generate-action-row"><button id="btn-generate-md" class="btn btn-primary hidden" type="button"><i data-lucide="sparkles"></i> 파일 분석 및 플레이리스트 생성</button><button id="btn-generate" class="btn btn-primary hidden" type="button"><i data-lucide="sparkles"></i> 텍스트 분석 및 플레이리스트 생성</button></div></div>
+      </section>
+      <section class="display-panel"><div class="visualizer-container glass-panel"><div class="visualizer-header"><div id="status-badge" class="status-badge idle"><div class="indicator-dot"></div><span id="status-text">대기 중</span></div><div id="segment-counter" class="segment-counter">청크 0 / 0</div></div><canvas id="visualizer-canvas" class="visualizer-canvas"></canvas></div><div class="player-dashboard glass-panel"><div class="progress-track-wrapper"><div class="progress-slider-container"><span id="time-elapsed">0:00</span><input type="range" id="progress-bar" class="range-slider" min="0" max="100" value="0" disabled><span id="time-total">0:00</span></div></div><div class="player-controls-row"><div class="controls-left-group"><div class="speed-control-badge"><i data-lucide="gauge" style="width: 14px; height: 14px;"></i><select id="speed-input" class="speed-select"><option value="1.0" selected>1.0</option><option value="1.1">1.1</option><option value="1.2">1.2</option><option value="1.3">1.3</option><option value="1.4">1.4</option><option value="1.5">1.5</option></select><span>배속</span></div></div><div class="controls-center-group"><button id="btn-prev" class="btn btn-icon" title="이전 청크" aria-label="이전 청크"><i data-lucide="skip-back"></i></button><button id="btn-play-pause" class="btn-play-pause" title="재생/일시정지" aria-label="재생/일시정지"><i data-lucide="play"></i></button><button id="btn-next" class="btn btn-icon" title="다음 청크" aria-label="다음 청크"><i data-lucide="skip-forward"></i></button><button id="btn-stop" class="btn btn-icon" title="정지" aria-label="정지"><i data-lucide="square"></i></button></div><div class="controls-right-group"><button id="btn-repeat" class="btn btn-icon btn-repeat" title="반복 없음" aria-label="반복 없음" aria-pressed="false"><i data-lucide="repeat"></i><span class="repeat-badge"></span></button><div class="volume-container"><i data-lucide="volume-2" style="width: 16px; height: 16px;"></i><input type="range" id="volume-slider" class="range-slider volume-slider" min="0" max="1" step="0.05" value="1"></div></div></div></div><div id="export-row" class="export-row hidden"><button id="btn-export-script" class="btn btn-secondary btn-sm" type="button"><i data-lucide="clipboard" style="width:12px;height:12px;"></i> 대본 복사</button><button id="btn-export-audio" class="btn btn-secondary btn-sm" type="button"><i data-lucide="download" style="width:12px;height:12px;"></i> MP3 내보내기</button></div><div class="preview-panel glass-panel"><div class="preview-header-row"><div id="preview-title" class="preview-title"><i data-lucide="book-open"></i> 스마트 프리뷰어</div><button id="btn-source-toggle" class="btn btn-secondary btn-icon hidden" style="width: auto; padding: 4px 12px; font-size: 11px;"><i data-lucide="file-text" style="width: 12px; height: 12px;"></i> 원문 보기</button><button id="btn-toggle-view" class="btn btn-secondary btn-icon hidden" title="보기 모드 전환" style="width: auto; padding: 4px 12px; font-size: 11px;"><i data-lucide="list-music" style="width: 12px; height: 12px;"></i> Playlist Mode</button></div><div id="preview-body" class="markdown-body"><p class="text-muted text-center" style="padding: 40px 0;">왼쪽 패널에 마크다운 파일을 업로드하거나 텍스트를 입력하여 재생을 준비하세요.</p></div><div id="playlist-container" class="playlist-view hidden"><p class="text-muted text-center" style="padding: 20px 0;">플레이리스트가 비어 있습니다.</p></div></div></section>
+    </main>
+  </div>
+
+  <footer class="app-footer">
+    <span>Made by <strong>Brian Park</strong> · Powered by <strong>OpenAI</strong></span>
+    <div class="model-badges">
+      <span class="model-badge"><i data-lucide="brain-circuit" style="width:11px;height:11px;"></i> gpt-5-mini</span>
+      <span class="model-badge"><i data-lucide="mic" style="width:11px;height:11px;"></i> gpt-4o-mini-tts</span>
+    </div>
+  </footer>
+
+  <script defer src="config.js"></script>
+  <script defer src="icons-markdown.js"></script>
+  <script defer src="cache.js"></script>
+  <script defer src="tts-transform.js"></script>
+  <script defer src="queue-manager.js"></script>
+  <script defer src="visualizer.js"></script>
+  <script defer src="app.js"></script>
+</body>
+</html>

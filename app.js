@@ -194,7 +194,9 @@ const elements = {
   previewBody: document.getElementById('preview-body'),
   playlistContainer: document.getElementById('playlist-container'),
   btnSourceToggle: document.getElementById('btn-source-toggle'),
-  btnToggleView: document.getElementById('btn-toggle-view')
+  btnToggleView: document.getElementById('btn-toggle-view'),
+  btnPreviewImport: document.getElementById('btn-preview-import'),
+  previewFileInput: document.getElementById('preview-file-input')
 };
 
 let currentViewMode = 'preview'; // 'preview' | 'playlist'
@@ -211,6 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupApiKey();
   setupTabs();
   setupUploadZone();
+  setupPreviewerImport();
   setupSettings();
   setupDiagnostics();
   setupPlayerControls();
@@ -746,6 +749,107 @@ function setupDiagnostics() {
   queue.addEventListener('diagnostic', appendDiagnosticEntry);
   queue.getDiagnostics().forEach(appendDiagnosticEntry);
   queue.recordDiagnostic('diagnostic-ui-ready');
+}
+
+/* ==========================================================================
+   Smart Previewer — Markdown Import & Auto-TTS
+   ========================================================================== */
+
+function setupPreviewerImport() {
+  elements.btnPreviewImport.addEventListener('click', () => {
+    elements.previewFileInput.value = '';
+    elements.previewFileInput.click();
+  });
+
+  elements.previewFileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) handlePreviewImport(file);
+  });
+
+  const panel = elements.previewPanel;
+
+  panel.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    panel.classList.add('drop-target');
+  });
+
+  panel.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    panel.classList.add('drop-target');
+  });
+
+  panel.addEventListener('dragleave', (e) => {
+    if (!panel.contains(e.relatedTarget)) {
+      panel.classList.remove('drop-target');
+    }
+  });
+
+  panel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    panel.classList.remove('drop-target');
+    const file = e.dataTransfer.files[0];
+    if (file) handlePreviewImport(file);
+  });
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = () => reject(new Error('파일 읽기 실패'));
+    reader.readAsText(file);
+  });
+}
+
+async function handlePreviewImport(file) {
+  const extension = file.name.split('.').pop().toLowerCase();
+  if (extension !== 'md' && extension !== 'txt') {
+    showNotification('마크다운(.md) 또는 텍스트(.txt) 파일만 가져올 수 있습니다.', 'warning');
+    return;
+  }
+
+  // 마크다운 모드로 전환
+  if (!state.isMarkdownMode) {
+    state.isMarkdownMode = true;
+    elements.tabMd.classList.add('active');
+    elements.tabText.classList.remove('active');
+    elements.contentMdInput.classList.add('active');
+    elements.contentTextInput.classList.remove('active');
+    cancelTransform();
+    state.segments = [];
+    queue.setSegments([]);
+    renderPreview('', []);
+  }
+
+  state.currentFile = file;
+  elements.fileName.textContent = file.name;
+  elements.fileSize.textContent = formatBytes(file.size);
+  elements.fileInfoCard.classList.remove('hidden');
+  elements.uploadZone.classList.add('hidden');
+
+  try {
+    const content = await readFileAsText(file);
+    if (state.currentFile !== file) return;
+    state.currentFile.content = content;
+    syncGenerateButtonVisibility();
+    showRawPreview(content);
+    if (window.lucide) window.lucide.createIcons();
+
+    if (state.apiKey) {
+      await triggerParsing({ autoplay: elements.chkAutoplay.checked });
+    } else {
+      showNotification('API Key를 입력하면 바로 TTS 변환이 시작됩니다.', 'warning');
+    }
+  } catch {
+    state.currentFile = null;
+    elements.fileInfoCard.classList.add('hidden');
+    elements.uploadZone.classList.remove('hidden');
+    syncGenerateButtonVisibility();
+    showNotification('파일을 읽는 중 오류가 발생했습니다.', 'error');
+  }
 }
 
 /* ==========================================================================

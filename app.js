@@ -97,7 +97,7 @@ async function refreshCacheCount() {
 
 function updateExportRowVisibility() {
   if (!elements.exportRow) return;
-  elements.exportRow.classList.toggle('hidden', state.segments.length === 0);
+  elements.exportRow.classList.toggle('hidden', state.segments.length === 0 || state.isAudioFileMode);
 }
 
 /**
@@ -109,6 +109,7 @@ function updateExportRowVisibility() {
 // Global application state
 const state = {
   isMarkdownMode: true,
+  isAudioFileMode: false,
   currentFile: null,
   segments: [],
   apiKey: '',
@@ -171,6 +172,10 @@ const elements = {
   btnExportAudio: document.getElementById('btn-export-audio'),
   exportRow: document.getElementById('export-row'),
   
+  btnAudioImport: document.getElementById('btn-audio-import'),
+  audioFileInput: document.getElementById('audio-file-input'),
+  vizContainer: document.querySelector('.visualizer-container'),
+
   visualizer: document.getElementById('visualizer-canvas'),
   statusBadge: document.getElementById('status-badge'),
   statusText: document.getElementById('status-text'),
@@ -208,6 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
   setupUploadZone();
   setupPreviewerImport();
+  setupAudioImport();
   setupSettings();
   setupPlayerControls();
   setupQueueListeners();
@@ -667,6 +673,113 @@ function setupPreviewerImport() {
   });
 }
 
+/* ==========================================================================
+   Audio Player — Direct MP3/Audio File Import
+   ========================================================================== */
+
+function setupAudioImport() {
+  elements.btnAudioImport.addEventListener('click', () => {
+    elements.audioFileInput.value = '';
+    elements.audioFileInput.click();
+  });
+
+  elements.audioFileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) handleAudioImport(file);
+  });
+
+  const viz = elements.vizContainer;
+  if (!viz) return;
+
+  viz.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    viz.classList.add('drop-target');
+  });
+
+  viz.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    viz.classList.add('drop-target');
+  });
+
+  viz.addEventListener('dragleave', (e) => {
+    if (!viz.contains(e.relatedTarget)) viz.classList.remove('drop-target');
+  });
+
+  viz.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    viz.classList.remove('drop-target');
+    const file = e.dataTransfer.files[0];
+    if (file) handleAudioImport(file);
+  });
+}
+
+async function handleAudioImport(file) {
+  if (!file.type.startsWith('audio/') && !/\.(mp3|wav|m4a|ogg|aac|flac)$/i.test(file.name)) {
+    showNotification('지원하는 오디오 파일(.mp3, .wav, .m4a 등)을 선택해주세요.', 'warning');
+    return;
+  }
+
+  elements.btnPlayPause.disabled = true;
+  elements.statusBadge.className = 'status-badge generating';
+  elements.statusText.textContent = '오디오 로딩 중...';
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    queue.initAudio();
+    const audioBuffer = await queue.decodeAudio(arrayBuffer);
+
+    cancelTransform();
+    state.isAudioFileMode = true;
+    state.rawHtml = '';
+    state.currentFile = null;
+    state.lastRender = { html: '', segments: [] };
+
+    // setSegments resets audioBuffer to null, so we patch it in after
+    queue.setSegments([{ id: 0, text: file.name.replace(/\.[^.]+$/, ''), ttsText: '' }]);
+    queue.segments[0].audioBuffer = audioBuffer;
+    queue.segments[0].state = 'ready';
+    state.segments = queue.segments;
+
+    renderAudioFilePreview(file);
+    updateExportRowVisibility();
+    elements.btnPlayPause.disabled = false;
+
+    await queue.primeForAutoplay();
+    await queue.play();
+  } catch (err) {
+    console.error('Audio import failed:', err);
+    showNotification(`오디오 파일 로딩 실패: ${err.message}`, 'error');
+    elements.statusBadge.className = 'status-badge idle';
+    elements.statusText.textContent = '대기 중';
+    elements.btnPlayPause.disabled = false;
+  }
+}
+
+function renderAudioFilePreview(file) {
+  const ext = (file.name.split('.').pop() || 'AUDIO').toUpperCase();
+  const baseName = file.name.replace(/\.[^.]+$/, '');
+
+  elements.previewTitle.innerHTML = '<i data-lucide="music"></i> 오디오 파일 재생';
+  elements.previewBody.innerHTML = `
+    <div class="audio-file-card">
+      <div class="audio-file-icon"><i data-lucide="music-2" style="width:24px;height:24px;"></i></div>
+      <div class="audio-file-info">
+        <div class="audio-file-name">${baseName}</div>
+        <div class="audio-file-meta">${ext} &middot; ${formatBytes(file.size)}</div>
+      </div>
+    </div>`;
+  elements.previewBody.classList.remove('hidden');
+  elements.playlistContainer.classList.add('hidden');
+  elements.btnToggleView.classList.add('hidden');
+  elements.btnSourceToggle.classList.add('hidden');
+  currentViewMode = 'preview';
+
+  if (window.lucide) window.lucide.createIcons();
+}
+
 function readFileAsText(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -760,6 +873,7 @@ async function triggerDirectTts({ autoplay = true } = {}) {
    ========================================================================== */
 
 function cancelTransform() {
+  state.isAudioFileMode = false;
   state.parseRequestId++;
   if (state.transformAbortController) {
     state.transformAbortController.abort();

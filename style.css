@@ -747,6 +747,68 @@ header {
   justify-content: center;
   min-height: 180px;
   overflow: hidden;
+  transition: outline 0.15s ease, background 0.15s ease;
+}
+
+.visualizer-container.drop-target {
+  outline: 2px dashed var(--primary);
+  outline-offset: -6px;
+  background: rgba(139, 92, 246, 0.04);
+}
+
+.visualizer-container.drop-target::after {
+  content: '오디오 파일을 놓아 재생';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  pointer-events: none;
+  z-index: 20;
+  white-space: nowrap;
+  background: rgba(255,255,255,0.88);
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(139,92,246,0.25);
+}
+
+.audio-file-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 28px 24px;
+  background: rgba(139, 92, 246, 0.04);
+  border: 1px solid rgba(139, 92, 246, 0.15);
+  border-radius: var(--radius-md);
+  margin: 24px 0;
+}
+
+.audio-file-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(139, 92, 246, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+.audio-file-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.audio-file-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
 }
 
 .visualizer-header {
@@ -1476,6 +1538,16 @@ body.dark .autoplay-label input[type="checkbox"] {
 body.dark .apikey-input::placeholder,
 body.dark .rich-textarea::placeholder {
   color: #64748b;
+}
+
+body.dark .audio-file-card {
+  background: rgba(139, 92, 246, 0.07);
+  border-color: rgba(139, 92, 246, 0.2);
+}
+
+body.dark .visualizer-container.drop-target::after {
+  background: rgba(15, 23, 42, 0.88);
+  border-color: rgba(139, 92, 246, 0.4);
 }
 
 body.dark .file-info-card,

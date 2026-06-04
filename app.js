@@ -838,17 +838,48 @@ async function handlePreviewImport(file) {
     showRawPreview(content);
     if (window.lucide) window.lucide.createIcons();
 
-    if (state.apiKey) {
-      await triggerParsing({ autoplay: elements.chkAutoplay.checked });
-    } else {
-      showNotification('API Key를 입력하면 바로 TTS 변환이 시작됩니다.', 'warning');
-    }
+    await triggerDirectTts({ autoplay: elements.chkAutoplay.checked });
   } catch {
     state.currentFile = null;
     elements.fileInfoCard.classList.add('hidden');
     elements.uploadZone.classList.remove('hidden');
     syncGenerateButtonVisibility();
     showNotification('파일을 읽는 중 오류가 발생했습니다.', 'error');
+  }
+}
+
+async function triggerDirectTts({ autoplay = true } = {}) {
+  if (!state.apiKey) {
+    showNotification('OpenAI API Key를 먼저 입력해주세요.', 'warning');
+    return false;
+  }
+  const sourceText = state.currentFile?.content;
+  if (!sourceText) return false;
+
+  cancelTransform();
+  queue.stop();
+
+  if (autoplay) queue.primeForAutoplay();
+
+  try {
+    const parseResult = parseMarkdown(sourceText);
+    state.segments = parseResult.segments;
+    queue.setSegments(state.segments);
+    state.configSnapshot = { voice: state.voice, styleHint: state.styleHint };
+    renderPreview(parseResult.html, parseResult.segments);
+    if (autoplay) await queue.play();
+    return true;
+  } catch (err) {
+    console.error('Direct TTS parse failed:', err);
+    state.segments = [];
+    queue.setSegments([]);
+    renderPreview('', []);
+    showNotification(err.message || '세그먼트 생성에 실패했습니다.', 'error');
+    return false;
+  } finally {
+    state.isTransforming = false;
+    state.transformAbortController = null;
+    setTransformingUi(false);
   }
 }
 

@@ -9,4 +9,3 @@ const MAX_TTS_CHARS = 500;
 const MAX_READY_AUDIO_BUFFERS = 12;
 const PREFETCH_SEGMENT_COUNT = 4;
 const INTER_CHUNK_PAUSE_SECONDS = 0.85;
-const STABLE_PLAYBACK_STORAGE_KEY = 'voxflow_stable_playback';

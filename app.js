@@ -164,7 +164,6 @@ const elements = {
   
   selectVoice: document.getElementById('select-voice'),
   chkAutoplay: document.getElementById('chk-autoplay'),
-  chkStablePlayback: document.getElementById('chk-stable-playback'),
   presetChips: document.querySelectorAll('.chip[data-preset]'),
   btnClearCache: document.getElementById('btn-clear-cache'),
   cacheCountBadge: document.getElementById('cache-count-badge'),
@@ -200,11 +199,6 @@ const elements = {
 };
 
 let currentViewMode = 'preview'; // 'preview' | 'playlist'
-const DIAGNOSTIC_STORAGE_KEY = 'voxflow_car_audio_diagnostics_v1';
-const DIAGNOSTIC_ENTRY_LIMIT = 80;
-const DIAGNOSTIC_VISIBLE_LIMIT = 40;
-const diagnosticEntries = [];
-let diagnosticLogEl = null;
 
 /**
  * Initialize VoxFlow Web Application.
@@ -215,7 +209,6 @@ document.addEventListener('DOMContentLoaded', () => {
   setupUploadZone();
   setupPreviewerImport();
   setupSettings();
-  setupDiagnostics();
   setupPlayerControls();
   setupQueueListeners();
   setupTextareaCounter();
@@ -608,18 +601,6 @@ function setupTextareaCounter() {
 
 function setupSettings() {
   state.voice = elements.selectVoice.value;
-  const savedStablePlayback = localStorage.getItem(STABLE_PLAYBACK_STORAGE_KEY);
-  const stablePlaybackEnabled = savedStablePlayback === null ? true : savedStablePlayback === 'true';
-  if (elements.chkStablePlayback) {
-    elements.chkStablePlayback.checked = stablePlaybackEnabled;
-    queue.setStablePlayback(stablePlaybackEnabled);
-    elements.chkStablePlayback.addEventListener('change', () => {
-      const enabled = elements.chkStablePlayback.checked;
-      localStorage.setItem(STABLE_PLAYBACK_STORAGE_KEY, String(enabled));
-      queue.setStablePlayback(enabled);
-    });
-  }
-
   const syncConfig = () => {
     state.voice = elements.selectVoice.value;
     queue.setConfig({ apiKey: state.apiKey, voice: state.voice, styleHint: state.styleHint });
@@ -640,115 +621,6 @@ function setupSettings() {
   });
 
   syncConfig();
-}
-
-/* ==========================================================================
-   In-app audio diagnostics for mobile Bluetooth / CarPlay checks
-   ========================================================================== */
-
-function formatDiagnosticEntry(entry) {
-  const snapshot = entry.snapshot || {};
-  const details = entry.details && Object.keys(entry.details).length
-    ? ' ' + Object.entries(entry.details).map(([key, value]) => `${key}=${value}`).join(' ')
-    : '';
-  const audioSession = snapshot.audioSession || '-';
-  return `${entry.time} ${entry.event}${details} | st=${snapshot.status} idx=${snapshot.index} t=${snapshot.currentTime}/${snapshot.duration} paused=${snapshot.paused} rs=${snapshot.readyState} ns=${snapshot.networkState} vis=${snapshot.visibility} as=${audioSession} intent=${snapshot.pauseIntent}`;
-}
-
-function loadPersistedDiagnosticEntries() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(DIAGNOSTIC_STORAGE_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.filter(entry => entry && entry.event) : [];
-  } catch {
-    return [];
-  }
-}
-
-function persistDiagnosticEntries() {
-  try {
-    localStorage.setItem(DIAGNOSTIC_STORAGE_KEY, JSON.stringify(diagnosticEntries.slice(-DIAGNOSTIC_ENTRY_LIMIT)));
-  } catch {
-    // Diagnostics should never interfere with playback.
-  }
-}
-
-function renderDiagnosticEntries() {
-  if (!diagnosticLogEl) return;
-  diagnosticLogEl.textContent = diagnosticEntries
-    .slice(-DIAGNOSTIC_VISIBLE_LIMIT)
-    .map(formatDiagnosticEntry)
-    .join('\n') || '대기 중';
-  diagnosticLogEl.scrollTop = diagnosticLogEl.scrollHeight;
-}
-
-function appendDiagnosticEntry(entry) {
-  if (!diagnosticLogEl) return;
-  diagnosticEntries.push(entry);
-  while (diagnosticEntries.length > DIAGNOSTIC_ENTRY_LIMIT) diagnosticEntries.shift();
-  persistDiagnosticEntries();
-  renderDiagnosticEntries();
-}
-
-function setupDiagnostics() {
-  const anchor = document.querySelector('.autoplay-row');
-  if (!anchor) return;
-
-  const panel = document.createElement('div');
-  panel.className = 'diagnostic-panel';
-  panel.innerHTML = `
-    <div class="diagnostic-header">
-      <span>차량 로그</span>
-      <div class="diagnostic-actions">
-        <button id="btn-copy-diagnostics" class="btn btn-secondary btn-sm" type="button">복사</button>
-        <button id="btn-clear-diagnostics" class="btn btn-secondary btn-sm" type="button">삭제</button>
-      </div>
-    </div>
-    <pre id="diagnostic-log" class="diagnostic-log">대기 중</pre>
-  `;
-  anchor.insertAdjacentElement('afterend', panel);
-
-  diagnosticLogEl = panel.querySelector('#diagnostic-log');
-  diagnosticEntries.push(...loadPersistedDiagnosticEntries().slice(-DIAGNOSTIC_ENTRY_LIMIT));
-  renderDiagnosticEntries();
-
-  panel.querySelector('#btn-copy-diagnostics')?.addEventListener('click', () => {
-    const text = diagnosticEntries.map(formatDiagnosticEntry).join('\n');
-    if (!text) {
-      showNotification('복사할 차량 로그가 없습니다.', 'warning');
-      return;
-    }
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(
-        () => showNotification('차량 로그가 클립보드에 복사되었습니다.', 'success'),
-        () => fallbackCopyText(
-          text,
-          'voxflow-car-audio-log',
-          '차량 로그가 클립보드에 복사되었습니다.',
-          '클립보드 접근 불가 — 차량 로그 파일로 저장했습니다.'
-        )
-      );
-    } else {
-      fallbackCopyText(
-        text,
-        'voxflow-car-audio-log',
-        '차량 로그가 클립보드에 복사되었습니다.',
-        '클립보드 접근 불가 — 차량 로그 파일로 저장했습니다.'
-      );
-    }
-  });
-  panel.querySelector('#btn-clear-diagnostics')?.addEventListener('click', () => {
-    diagnosticEntries.length = 0;
-    try {
-      localStorage.removeItem(DIAGNOSTIC_STORAGE_KEY);
-    } catch {
-      // Ignore storage failures.
-    }
-    renderDiagnosticEntries();
-  });
-
-  queue.addEventListener('diagnostic', appendDiagnosticEntry);
-  queue.getDiagnostics().forEach(appendDiagnosticEntry);
-  queue.recordDiagnostic('diagnostic-ui-ready');
 }
 
 /* ==========================================================================
@@ -1175,7 +1047,7 @@ function setupPlayerControls() {
       return;
     }
     
-    if (queue.status === 'playing' || queue.status === 'buffering' || (queue.useStablePlayback && queue.status === 'generating')) {
+    if (queue.status === 'playing' || queue.status === 'buffering') {
       queue.pause();
     } else {
       // Flush stale buffers if voice/style changed since last play (e.g. typed style then clicked play)
@@ -1555,13 +1427,8 @@ function stopSilentWakeAudio() {
   }
 }
 
-function shouldUseSilentWakeAudio() {
-  return !(queue.useStablePlayback && queue.hasActiveAudioFocus());
-}
-
 function startWakeFallback() {
   const video = ensureWakeFallbackVideo();
-  const shouldLogStart = Boolean((wakeFallbackPaint && !wakeFallbackTimer) || (video && video.paused));
   if (wakeFallbackPaint && !wakeFallbackTimer) {
     wakeFallbackPaint();
     wakeFallbackTimer = setInterval(wakeFallbackPaint, 1000);
@@ -1569,22 +1436,10 @@ function startWakeFallback() {
   if (video && video.paused) {
     video.play().catch(() => {});
   }
-  const useSilentAudio = shouldUseSilentWakeAudio();
-  if (shouldLogStart) {
-    queue.recordDiagnostic('wake:fallback-start', { silentAudio: useSilentAudio });
-  }
-  if (useSilentAudio) {
-    startSilentWakeAudio();
-  } else {
-    stopSilentWakeAudio();
-  }
+  startSilentWakeAudio();
 }
 
 function stopWakeFallback() {
-  const hadFallback = Boolean(wakeFallbackVideo || wakeFallbackTimer || silentWakeSource);
-  if (hadFallback) {
-    queue.recordDiagnostic('wake:fallback-stop');
-  }
   if (wakeFallbackVideo && !wakeFallbackVideo.paused) {
     wakeFallbackVideo.pause();
   }
@@ -1656,11 +1511,8 @@ function updateWakeLock() {
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    queue.recordDiagnostic('visibility:hidden');
     stopVisualizer();
   } else {
-    queue.recordDiagnostic('visibility:visible');
-    // 화면 복귀 시 AudioContext 재개 (화면 잠금 후 복귀 대응)
     if (queue.audioCtx?.state === 'suspended') {
       queue.audioCtx.resume().catch(() => {});
     }
@@ -1694,7 +1546,6 @@ document.addEventListener('click', () => {
 }, { once: false, passive: true });
 
 window.addEventListener('pagehide', () => {
-  queue.recordDiagnostic('pagehide');
   stopVisualizer();
   stopWakeFallback();
 });

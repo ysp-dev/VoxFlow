@@ -668,54 +668,6 @@ header {
   background: rgba(79, 70, 229, 0.06);
 }
 
-/* Car audio diagnostics */
-.diagnostic-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: rgba(248, 250, 252, 0.46);
-}
-
-.diagnostic-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--text-secondary);
-}
-
-.diagnostic-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.diagnostic-actions .btn {
-  min-height: 26px;
-  padding: 4px 9px;
-  font-size: 10px;
-}
-
-.diagnostic-log {
-  width: 100%;
-  max-height: 110px;
-  overflow: auto;
-  padding: 8px;
-  border: 1px solid rgba(17, 24, 39, 0.08);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.78);
-  color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 10px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
 
 /* Cache Manager Row */
 .cache-manager-row {
@@ -1498,15 +1450,6 @@ body.dark .autoplay-row {
   border-color: rgba(255, 255, 255, 0.08);
 }
 
-body.dark .diagnostic-panel {
-  background: rgba(15, 23, 42, 0.34);
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
-body.dark .diagnostic-log {
-  background: rgba(15, 23, 42, 0.58);
-  border-color: rgba(148, 163, 184, 0.16);
-}
 
 body.dark .tab-container {
   background: rgba(9, 12, 20, 0.64);

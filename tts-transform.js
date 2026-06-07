@@ -18,6 +18,9 @@ const STRUCT_STYLE_HINTS = {
   '속독':     '문장을 최대한 압축한다. 불필요한 수식어·중복 표현을 제거하고 핵심만 남긴다.',
 };
 
+// GPT 구조 변환을 건너뛰고 원문을 그대로 TTS에 전달하는 프리셋
+const PASSTHROUGH_PRESETS = new Set(['기본']);
+
 const ENGLISH_PRONUNCIATION_OVERRIDES = {
   call: '콜',
   calls: '콜',

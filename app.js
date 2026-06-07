@@ -116,6 +116,7 @@ const state = {
   voice: 'cedar',
   styleHint: '',
   structHint: '',
+  passthroughTransform: true,
   configSnapshot: { voice: 'cedar', styleHint: '' },
   transformAbortController: null,
   parseRequestId: 0,
@@ -166,6 +167,7 @@ const elements = {
   selectVoice: document.getElementById('select-voice'),
   chkAutoplay: document.getElementById('chk-autoplay'),
   presetChips: document.querySelectorAll('.chip[data-preset]'),
+  styleHintInput: document.getElementById('style-hint-input'),
   btnClearCache: document.getElementById('btn-clear-cache'),
   cacheCountBadge: document.getElementById('cache-count-badge'),
   btnExportScript: document.getElementById('btn-export-script'),
@@ -612,6 +614,16 @@ function setupSettings() {
     queue.setConfig({ apiKey: state.apiKey, voice: state.voice, styleHint: state.styleHint });
   };
 
+  const updateStyleHintInput = () => {
+    const el = elements.styleHintInput;
+    const isPassthrough = state.passthroughTransform;
+    el.disabled = isPassthrough;
+    el.value = isPassthrough ? '' : state.structHint;
+    el.placeholder = isPassthrough
+      ? '기본 모드: GPT 변환 없이 원문을 그대로 TTS 재생합니다'
+      : 'GPT가 텍스트를 변환할 때 적용할 스타일 힌트를 직접 입력하세요.';
+  };
+
   elements.selectVoice.addEventListener('change', () => { syncConfig(); flushAudioBuffers(); });
 
   // Preset chips
@@ -621,11 +633,21 @@ function setupSettings() {
       chip.classList.add('active');
       state.styleHint = STYLE_PRESETS[chip.dataset.preset] ?? '';
       state.structHint = STRUCT_STYLE_HINTS[chip.dataset.preset] ?? '';
+      state.passthroughTransform = PASSTHROUGH_PRESETS.has(chip.dataset.preset);
+      updateStyleHintInput();
       syncConfig();
       flushAudioBuffers();
     });
   });
 
+  // Style hint textarea — 사용자가 직접 편집 시 state.structHint 업데이트
+  elements.styleHintInput.addEventListener('input', () => {
+    if (!state.passthroughTransform) {
+      state.structHint = elements.styleHintInput.value;
+    }
+  });
+
+  updateStyleHintInput();
   syncConfig();
 }
 
@@ -929,11 +951,16 @@ async function triggerParsing(options = {}) {
   setTransformingUi(true);
 
   try {
-    const transformedText = await transformTextForTtsStructure(sourceText, {
-      apiKey: state.apiKey,
-      signal: state.transformAbortController.signal,
-      structHint: state.structHint
-    });
+    let transformedText;
+    if (state.passthroughTransform) {
+      transformedText = sourceText;
+    } else {
+      transformedText = await transformTextForTtsStructure(sourceText, {
+        apiKey: state.apiKey,
+        signal: state.transformAbortController.signal,
+        structHint: state.structHint
+      });
+    }
 
     if (parseRequestId !== state.parseRequestId) return false;
 
@@ -942,7 +969,10 @@ async function triggerParsing(options = {}) {
     queue.setSegments(state.segments);
     state.configSnapshot = { voice: state.voice, styleHint: state.styleHint };
     renderPreview(parseResult.html, parseResult.segments);
-    showNotification('GPT-5 Mini 구조 변환이 완료되었습니다.', 'success');
+    showNotification(
+      state.passthroughTransform ? '원문 그대로 TTS 준비가 완료되었습니다.' : 'GPT-5 Mini 구조 변환이 완료되었습니다.',
+      'success'
+    );
     if (autoplay) {
       await queue.play();
     }

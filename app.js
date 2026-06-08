@@ -699,6 +699,8 @@ function setupPreviewerImport() {
    Audio Player — Direct MP3/Audio File Import
    ========================================================================== */
 
+let audioImportRequestId = 0;
+
 function setupAudioImport() {
   elements.btnAudioImport.addEventListener('click', () => {
     elements.audioFileInput.value = '';
@@ -744,16 +746,22 @@ async function handleAudioImport(file) {
     return;
   }
 
+  const importRequestId = ++audioImportRequestId;
+  cancelTransform();
+  queue.stop();
+
   elements.btnPlayPause.disabled = true;
   elements.statusBadge.className = 'status-badge generating';
   elements.statusText.textContent = '오디오 로딩 중...';
 
   try {
     const arrayBuffer = await file.arrayBuffer();
+    if (importRequestId !== audioImportRequestId) return;
+
     queue.initAudio();
     const audioBuffer = await queue.decodeAudio(arrayBuffer);
+    if (importRequestId !== audioImportRequestId) return;
 
-    cancelTransform();
     state.isAudioFileMode = true;
     state.rawHtml = '';
     state.currentFile = null;
@@ -767,11 +775,15 @@ async function handleAudioImport(file) {
 
     renderAudioFilePreview(file);
     updateExportRowVisibility();
+    elements.segmentCounter.textContent = '청크 1 / 1';
+    elements.progressBar.value = 0;
+    elements.timeElapsed.textContent = '0:00';
+    elements.timeTotal.textContent = formatTime(audioBuffer.duration);
+    elements.statusBadge.className = 'status-badge idle';
+    elements.statusText.textContent = '재생 준비됨';
     elements.btnPlayPause.disabled = false;
-
-    await queue.primeForAutoplay();
-    await queue.play();
   } catch (err) {
+    if (importRequestId !== audioImportRequestId) return;
     console.error('Audio import failed:', err);
     showNotification(`오디오 파일 로딩 실패: ${err.message}`, 'error');
     elements.statusBadge.className = 'status-badge idle';

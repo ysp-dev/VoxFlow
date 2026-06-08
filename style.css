@@ -967,14 +967,16 @@ header {
 }
 
 .btn-file-open {
-  min-width: 104px;
-  height: 34px;
-  padding: 0 12px;
+  width: auto !important;
+  min-width: 116px !important;
+  height: 36px !important;
+  padding: 0 14px !important;
   flex-shrink: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm) !important;
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
+  aspect-ratio: auto !important;
 }
 
 .btn-file-open svg {

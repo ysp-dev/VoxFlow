@@ -90,10 +90,6 @@ function releasePlaybackAudioSession() {
  */
 class QueueManager {
   constructor() {
-    this.audioCtx = null;
-    this.analyserNode = null;
-    this.gainNode = null;
-    
     this.segments = [];
     this.currentIndex = 0;
     this.isPlaying = false;
@@ -106,13 +102,9 @@ class QueueManager {
     this.playbackAudio = null;
     this.currentPlaybackToken = 0;
     this.currentSourceNode = null;
-    this.startTime = 0;
     this.pausedAt = 0;
     this.generationAbortController = null;
     this.queueVersion = 0;
-    this.nextScheduledTime = 0;
-    this.preScheduledSource = null;
-    this.preScheduledIndex = -1;
     this._primedAudio = null;
     this.primedObjectUrl = null;
     this.autoplayPrimeId = 0;
@@ -135,42 +127,6 @@ class QueueManager {
     this.progressInterval = null;
   }
 
-  /**
-   * Lazy-initializes the browser Web Audio API context under user gesture.
-   */
-  initAudio() {
-    if (!this.audioCtx) {
-      this.audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'playback' });
-      
-      // Node routing: Source -> GainNode (Volume) -> AnalyserNode (Visualizer) -> Destination (Speakers)
-      this.analyserNode = this.audioCtx.createAnalyser();
-      this.analyserNode.fftSize = 256;
-      
-      this.gainNode = this.audioCtx.createGain();
-      this.gainNode.gain.setValueAtTime(this.volume, this.audioCtx.currentTime);
-      
-      this.gainNode.connect(this.analyserNode);
-      this.analyserNode.connect(this.audioCtx.destination);
-    }
-    
-    if (this.audioCtx.state === 'suspended') {
-      this.audioCtx.resume().catch(() => {});
-    }
-  }
-
-  async ensureAudioContextRunning() {
-    this.initAudio();
-    if (!this.audioCtx) return false;
-    if (this.audioCtx.state === 'suspended') {
-      try {
-        await this.audioCtx.resume();
-      } catch {
-        return false;
-      }
-    }
-    return this.audioCtx.state === 'running';
-  }
-
   initPlaybackAudio() {
     if (this.playbackAudio) return this.playbackAudio;
 
@@ -186,7 +142,7 @@ class QueueManager {
       this._handlePlaybackEnded(audio);
     });
     audio.addEventListener('error', () => {
-      if (!this.isPlaying || this.currentSourceNode !== audio) return;
+      if (!this.isPlaying || this.status !== 'playing' || this.currentSourceNode !== audio) return;
       this.isPlaying = false;
       this.currentSourceNode = null;
       this.stopProgressTracking();
@@ -201,23 +157,6 @@ class QueueManager {
 
   primeForAutoplay() {
     requestPlaybackAudioSession();
-    this.initAudio();
-
-    // Prime Web Audio API context (일반 모드)
-    if (this.audioCtx && this.gainNode) {
-      try {
-        const buffer = this.audioCtx.createBuffer(1, 1, this.audioCtx.sampleRate);
-        const source = this.audioCtx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(this.gainNode);
-        source.onended = () => {
-          try { source.disconnect(); } catch {}
-        };
-        source.start(0);
-      } catch {
-        // If silent priming is blocked, the normal play button remains the fallback.
-      }
-    }
 
     // Keep a tiny foreground audio stream alive while text/voice generation runs.
     // This is the only browser-safe way to request mobile/BT audio focus from
@@ -319,10 +258,10 @@ class QueueManager {
     this.segments = segments.map(seg => ({
       ...seg,
       ttsText: seg.ttsText || getNarrationText(seg.text),
-      audioBuffer: null,
       audioArrayBuffer: null,
       audioMimeType: null,
       audioObjectUrl: null,
+      audioDuration: null,
       state: 'idle', // 'idle' | 'generating' | 'ready' | 'error'
       errorMsg: null
     }));
@@ -340,12 +279,12 @@ class QueueManager {
   releaseDistantAudioBuffers(centerIndex = this.currentIndex) {
     const readySegments = this.segments
       .map((seg, index) => ({ seg, index }))
-      .filter(({ seg }) => seg.audioBuffer)
+      .filter(({ seg }) => seg.audioArrayBuffer)
       .sort((a, b) => Math.abs(a.index - centerIndex) - Math.abs(b.index - centerIndex));
 
     readySegments.slice(MAX_READY_AUDIO_BUFFERS).forEach(({ seg }) => {
-      seg.audioBuffer = null;
       seg.audioArrayBuffer = null;
+      seg.audioDuration = null;
       this._revokeSegmentAudioUrl(seg);
       if (seg.state === 'ready') {
         seg.state = 'idle';
@@ -360,9 +299,6 @@ class QueueManager {
     this.volume = Math.max(0, Math.min(1, value));
     if (this.playbackAudio) {
       this.playbackAudio.volume = this.volume;
-    }
-    if (this.gainNode) {
-      this.gainNode.gain.setValueAtTime(this.volume, this.audioCtx.currentTime);
     }
   }
 
@@ -404,17 +340,10 @@ class QueueManager {
 
     this.isPlaying = false;
     this.setStatus('paused');
-    this._clearPreScheduled();
 
     if (this.currentSourceNode) {
-      if (this.currentSourceNode === this.playbackAudio) {
-        this.pausedAt = this.playbackAudio.currentTime || 0;
-        this.playbackAudio.pause();
-      } else {
-        this.currentSourceNode.onended = null;
-        this.currentSourceNode.stop();
-        this.pausedAt = Math.max(0, (this.audioCtx.currentTime - this.startTime) * this.playbackRate);
-      }
+      this.pausedAt = this.playbackAudio.currentTime || 0;
+      this.playbackAudio.pause();
       this.currentSourceNode = null;
     }
 
@@ -432,8 +361,6 @@ class QueueManager {
     } = options;
     this.isPlaying = false;
     this.currentPlaybackToken++;
-    this._clearPreScheduled();
-    this.nextScheduledTime = 0;
     if (!preservePrimedAudio) this._clearPrimedAudio();
     this.setStatus('idle');
 
@@ -443,14 +370,9 @@ class QueueManager {
     }
 
     if (this.currentSourceNode) {
-      if (this.currentSourceNode === this.playbackAudio) {
-        this.playbackAudio.pause();
-        this.playbackAudio.removeAttribute('src');
-        this.playbackAudio.load();
-      } else {
-        this.currentSourceNode.onended = null;
-        this.currentSourceNode.stop();
-      }
+      this.playbackAudio.pause();
+      this.playbackAudio.removeAttribute('src');
+      this.playbackAudio.load();
       this.currentSourceNode = null;
     }
 
@@ -466,9 +388,6 @@ class QueueManager {
 
   releaseAudioSession() {
     releasePlaybackAudioSession();
-    if (this.audioCtx?.state === 'running') {
-      this.audioCtx.suspend().catch(() => {});
-    }
   }
 
   hasActiveAudioFocus() {
@@ -488,6 +407,39 @@ class QueueManager {
     if (!segment?.audioObjectUrl) return;
     URL.revokeObjectURL(segment.audioObjectUrl);
     segment.audioObjectUrl = null;
+  }
+
+  async probeAudioDuration(arrayBuffer, mimeType = 'audio/mpeg') {
+    const url = URL.createObjectURL(new Blob([arrayBuffer], { type: mimeType || 'audio/mpeg' }));
+    const audio = new Audio();
+    audio.preload = 'metadata';
+    audio.src = url;
+
+    try {
+      return await new Promise((resolve, reject) => {
+        const cleanup = () => {
+          audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+          audio.removeEventListener('error', onError);
+          audio.removeAttribute('src');
+          audio.load();
+          URL.revokeObjectURL(url);
+        };
+        const onLoadedMetadata = () => {
+          const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+          cleanup();
+          resolve(duration);
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error('metadata'));
+        };
+        audio.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+        audio.addEventListener('error', onError, { once: true });
+      });
+    } catch {
+      URL.revokeObjectURL(url);
+      throw new Error('오디오 메타데이터를 읽지 못했습니다.');
+    }
   }
 
   /**
@@ -538,8 +490,8 @@ class QueueManager {
     const segment = this.segments[index];
     this.emit('segmentStart', index);
     
-    // Case 1: Audio buffer is ready
-    if (segment.audioBuffer) {
+    // Case 1: Audio payload is ready
+    if (segment.audioArrayBuffer) {
       this.pausedAt = offset;
       if (!this.generationAbortController) {
         this.generationAbortController = new AbortController();
@@ -563,7 +515,7 @@ class QueueManager {
           cleanup();
           return;
         }
-        if (segment.state === 'ready' && segment.audioBuffer) {
+        if (segment.state === 'ready' && segment.audioArrayBuffer) {
           cleanup();
           this.playSegment(index, offset);
         } else if (segment.state === 'error') {
@@ -596,9 +548,6 @@ class QueueManager {
       const result = await generateSpeech(segment.ttsText || segment.text, { ...this.apiConfig, signal });
       segment.audioArrayBuffer = result.arrayBuffer;
       segment.audioMimeType = result.mimeType || 'audio/mpeg';
-      const audioBuffer = await this.decodeAudio(segment.audioArrayBuffer);
-
-      segment.audioBuffer = audioBuffer;
       segment.state = 'ready';
       this.releaseDistantAudioBuffers(index);
       this.emit('stateUpdate', this.segments);
@@ -638,7 +587,7 @@ class QueueManager {
       if (nextIndex >= this.segments.length) break;
       
       const segment = this.segments[nextIndex];
-      if (segment.audioBuffer) {
+      if (segment.audioArrayBuffer) {
         continue;
       }
       if (segment.state !== 'idle') continue;
@@ -655,7 +604,6 @@ class QueueManager {
           if (this.queueVersion !== capturedVersion) return;
           segment.audioArrayBuffer = result.arrayBuffer;
           segment.audioMimeType = result.mimeType || 'audio/mpeg';
-          segment.audioBuffer = await this.decodeAudio(segment.audioArrayBuffer);
           segment.state = 'ready';
           this.releaseDistantAudioBuffers(nextIndex);
         } catch (err) {
@@ -701,59 +649,6 @@ class QueueManager {
     }
   }
 
-  /**
-   * Execute physical buffer playback.
-   */
-  _clearPreScheduled() {
-    if (this.preScheduledSource) {
-      this.preScheduledSource.onended = null;
-      try { this.preScheduledSource.stop(); } catch {}
-      this.preScheduledSource = null;
-    }
-    this.preScheduledIndex = -1;
-  }
-
-  _tryPreSchedule(index, audioBuffer) {
-    if (!this.isPlaying || index !== this.currentIndex + 1) return;
-    if (this.nextScheduledTime <= this.audioCtx.currentTime) return;
-    if (this.preScheduledIndex === index) return;
-    this._clearPreScheduled();
-
-    const source = this.audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.playbackRate.setValueAtTime(this.playbackRate, this.audioCtx.currentTime);
-    source.connect(this.gainNode);
-
-    source.onended = () => this._handlePlaybackEnded(source);
-
-    source.start(this.nextScheduledTime, 0);
-    this.preScheduledSource = source;
-    this.preScheduledIndex = index;
-  }
-
-  _activatePreScheduledCurrent() {
-    if (this.preScheduledIndex !== this.currentIndex || !this.preScheduledSource) {
-      return false;
-    }
-
-    const scheduledSource = this.preScheduledSource;
-    const segment = this.segments[this.currentIndex];
-    const scheduledStartAt = this.nextScheduledTime;
-
-    this.currentSourceNode = scheduledSource;
-    this.preScheduledSource = null;
-    this.preScheduledIndex = -1;
-
-    if (segment?.audioBuffer) {
-      this.startTime = scheduledStartAt;
-      this.nextScheduledTime = scheduledStartAt + (segment.audioBuffer.duration / this.playbackRate) + INTER_CHUNK_PAUSE_SECONDS;
-      this.startProgressTracking(segment.audioBuffer.duration);
-    }
-
-    this.prefetchNext();
-    return true;
-  }
-
   _handlePlaybackEnded(source) {
     if (source && this.currentSourceNode !== source) return;
     this.stopProgressTracking();
@@ -763,19 +658,14 @@ class QueueManager {
 
     if (this.repeatMode === 'one') {
       this.pausedAt = 0;
-      this.nextScheduledTime = 0;
-      this._clearPreScheduled();
       this.playSegment(this.currentIndex);
     } else if (this.currentIndex < this.segments.length - 1) {
       this.currentIndex++;
       this.pausedAt = 0;
       this.emit('segmentStart', this.currentIndex);
 
-      if (this._activatePreScheduledCurrent()) return;
-
-      this._clearPreScheduled();
       const nextSeg = this.segments[this.currentIndex];
-      if (nextSeg?.audioBuffer) {
+      if (nextSeg?.audioArrayBuffer) {
         const scheduledIndex = this.currentIndex;
         setTimeout(() => {
           if (this.isPlaying && !this.currentSourceNode && this.currentIndex === scheduledIndex) {
@@ -783,18 +673,14 @@ class QueueManager {
           }
         }, INTER_CHUNK_PAUSE_SECONDS * 1000);
       } else {
-        this.nextScheduledTime = 0;
         this.playSegment(this.currentIndex);
       }
       this.prefetchNext();
     } else if (this.repeatMode === 'all') {
       this.currentIndex = 0;
       this.pausedAt = 0;
-      this.nextScheduledTime = 0;
-      this._clearPreScheduled();
       this.playSegment(0);
     } else {
-      this._clearPreScheduled();
       this.stop();
     }
   }
@@ -846,7 +732,8 @@ class QueueManager {
       });
       if (!this.isPlaying || playbackToken !== this.currentPlaybackToken) return;
 
-      const duration = Number.isFinite(audio.duration) ? audio.duration : segment.audioBuffer.duration;
+      const duration = Number.isFinite(audio.duration) ? audio.duration : (segment.audioDuration || 0);
+      segment.audioDuration = duration;
       const safeOffset = Math.max(0, Math.min(offset, Math.max(0, duration - 0.05)));
       audio.currentTime = safeOffset;
       await audio.play();
@@ -859,21 +746,7 @@ class QueueManager {
     }
     this._clearPrimedAudio();
     this.setStatus('playing');
-    this.startProgressTracking(Number.isFinite(audio.duration) ? audio.duration : segment.audioBuffer.duration);
-  }
-
-  /**
-   * Decode returned audio payload. Automatically handles fallback 
-   * decodeAudioData vs raw PCM 16-bit decoding.
-   */
-  async decodeAudio(arrayBuffer) {
-    this.initAudio();
-    try {
-      return await this.audioCtx.decodeAudioData(arrayBuffer.slice(0));
-    } catch (err) {
-      console.error('Audio decode failed:', err);
-      throw new Error('오디오 디코딩에 실패했습니다. 브라우저가 MP3 형식을 지원하는지 확인해주세요.');
-    }
+    this.startProgressTracking(segment.audioDuration || audio.duration || 1);
   }
 
   /**
@@ -888,9 +761,7 @@ class QueueManager {
         return;
       }
       
-      const elapsed = this.currentSourceNode === this.playbackAudio
-        ? this.playbackAudio.currentTime
-        : Math.max(0, (this.audioCtx.currentTime - this.startTime) * this.playbackRate);
+      const elapsed = this.playbackAudio?.currentTime || 0;
       this.emit('progress', elapsed, duration);
     }, 100);
   }

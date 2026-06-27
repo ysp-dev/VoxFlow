@@ -874,7 +874,7 @@ function parsePlainInput(plainText) {
           text: chunkTrimmed,
           ttsText: getNarrationText(chunkTrimmed),
           type: 'sentence',
-          audioBuffer: null,
+          audioArrayBuffer: null,
           state: 'idle'
         });
         
@@ -888,7 +888,7 @@ function parsePlainInput(plainText) {
         text: trimmed,
         ttsText: getNarrationText(trimmed),
         type: 'p',
-        audioBuffer: null,
+        audioArrayBuffer: null,
         state: 'idle'
       });
       
@@ -976,7 +976,7 @@ function parseMarkdown(markdownText) {
           text: chunkTrimmed,
           ttsText: getNarrationText(chunkTrimmed),
           type: 'sentence',
-          audioBuffer: null,
+          audioArrayBuffer: null,
           state: 'idle'
         });
         
@@ -995,7 +995,7 @@ function parseMarkdown(markdownText) {
         text: textContent,
         ttsText: getNarrationText(textContent),
         type: el.tagName.toLowerCase(),
-        audioBuffer: null,
+        audioArrayBuffer: null,
         state: 'idle'
       });
       

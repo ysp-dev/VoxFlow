@@ -2,8 +2,6 @@
 
 let visualizerAnimationId = null;
 let visualizerPhase = 0;
-let visualizerDataArray = null;
-let visualizerDataArrayLength = 0;
 
 function stopVisualizer() {
   if (visualizerAnimationId) {
@@ -45,25 +43,15 @@ function startVisualizer() {
     let amplitude = 0.1; // Default low idle vibration
     let frequency = 0.015;
     
-    // If playing, read actual frequency data
-    if (queue.analyserNode && (queue.status === 'playing' || queue.status === 'buffering')) {
-      const bufferLength = queue.analyserNode.frequencyBinCount;
-      if (!visualizerDataArray || visualizerDataArrayLength !== bufferLength) {
-        visualizerDataArray = new Uint8Array(bufferLength);
-        visualizerDataArrayLength = bufferLength;
-      }
-      queue.analyserNode.getByteFrequencyData(visualizerDataArray);
-      
-      // Calculate average volume
-      let sum = 0;
-      for (let i = 0; i < bufferLength; i++) {
-        sum += visualizerDataArray[i];
-      }
-      const avg = sum / bufferLength;
-      
-      // Modulate parameters based on volume
-      amplitude = 0.1 + (avg / 255) * 1.4; // Scaled height
-      frequency = 0.01 + (avg / 255) * 0.02; // Scaled wave count
+    // CarPlay-safe mode: playback bypasses Web Audio, so animate by state.
+    if (queue.status === 'playing') {
+      const pulse = (Math.sin(visualizerPhase * 1.7) + 1) / 2;
+      amplitude = 0.75 + pulse * 0.35;
+      frequency = 0.016 + pulse * 0.006;
+    } else if (queue.status === 'buffering' || queue.status === 'generating') {
+      const pulse = (Math.sin(visualizerPhase * 1.2) + 1) / 2;
+      amplitude = 0.35 + pulse * 0.2;
+      frequency = 0.013;
     }
     
     visualizerPhase += 0.04; // Wave speed

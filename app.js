@@ -133,9 +133,9 @@ function flushAudioBuffers() {
     queue.stop();
     queue.segments.forEach(seg => {
       queue._revokeSegmentAudioUrl?.(seg);
-      seg.audioBuffer = null;
       seg.audioArrayBuffer = null;
       seg.audioMimeType = null;
+      seg.audioDuration = null;
       if (seg.state === 'ready' || seg.state === 'generating') seg.state = 'idle';
     });
     queue.emit('stateUpdate', queue.segments);
@@ -760,8 +760,7 @@ async function handleAudioImport(file) {
     const arrayBuffer = await file.arrayBuffer();
     if (importRequestId !== audioImportRequestId) return;
 
-    queue.initAudio();
-    const audioBuffer = await queue.decodeAudio(arrayBuffer);
+    const audioDuration = await queue.probeAudioDuration(arrayBuffer, file.type || 'audio/mpeg');
     if (importRequestId !== audioImportRequestId) return;
 
     state.isAudioFileMode = true;
@@ -769,11 +768,11 @@ async function handleAudioImport(file) {
     state.currentFile = null;
     state.lastRender = { html: '', segments: [] };
 
-    // setSegments resets audioBuffer to null, so we patch it in after
+    // setSegments resets audio payload fields to null, so we patch them in after
     queue.setSegments([{ id: 0, text: file.name.replace(/\.[^.]+$/, ''), ttsText: '' }]);
     queue.segments[0].audioArrayBuffer = arrayBuffer;
     queue.segments[0].audioMimeType = file.type || 'audio/mpeg';
-    queue.segments[0].audioBuffer = audioBuffer;
+    queue.segments[0].audioDuration = audioDuration;
     queue.segments[0].state = 'ready';
     state.segments = queue.segments;
 
@@ -782,7 +781,7 @@ async function handleAudioImport(file) {
     elements.segmentCounter.textContent = '청크 1 / 1';
     elements.progressBar.value = 0;
     elements.timeElapsed.textContent = '0:00';
-    elements.timeTotal.textContent = formatTime(audioBuffer.duration);
+    elements.timeTotal.textContent = formatTime(audioDuration);
     elements.statusBadge.className = 'status-badge idle';
     elements.statusText.textContent = '재생 준비됨';
     elements.btnPlayPause.disabled = false;
@@ -1371,7 +1370,7 @@ function setupQueueListeners() {
   // Track chunk's running time progress
   queue.addEventListener('progress', (elapsed, duration) => {
     // Math checks
-    const percent = Math.min(100, (elapsed / duration) * 100);
+    const percent = duration > 0 ? Math.min(100, (elapsed / duration) * 100) : 0;
     elements.progressBar.value = percent;
     
     elements.timeElapsed.textContent = formatTime(elapsed);
@@ -1514,8 +1513,6 @@ let wakeFallbackVideo = null;
 let wakeFallbackCanvas = null;
 let wakeFallbackPaint = null;
 let wakeFallbackTimer = null;
-let silentWakeSource = null;
-let silentWakeGain = null;
 
 function shouldKeepScreenAwake() {
   return state.isTransforming || ['playing', 'generating', 'buffering'].includes(queue.status);
@@ -1557,36 +1554,6 @@ function ensureWakeFallbackVideo() {
   return wakeFallbackVideo;
 }
 
-function startSilentWakeAudio() {
-  if (silentWakeSource) return;
-  try {
-    queue.initAudio();
-    if (!queue.audioCtx) return;
-    silentWakeGain = queue.audioCtx.createGain();
-    silentWakeGain.gain.setValueAtTime(0.000001, queue.audioCtx.currentTime);
-    silentWakeSource = queue.audioCtx.createOscillator();
-    silentWakeSource.frequency.setValueAtTime(20, queue.audioCtx.currentTime);
-    silentWakeSource.connect(silentWakeGain);
-    silentWakeGain.connect(queue.audioCtx.destination);
-    silentWakeSource.start();
-  } catch {
-    silentWakeSource = null;
-    silentWakeGain = null;
-  }
-}
-
-function stopSilentWakeAudio() {
-  if (silentWakeSource) {
-    try { silentWakeSource.stop(); } catch {}
-    try { silentWakeSource.disconnect(); } catch {}
-    silentWakeSource = null;
-  }
-  if (silentWakeGain) {
-    try { silentWakeGain.disconnect(); } catch {}
-    silentWakeGain = null;
-  }
-}
-
 function startWakeFallback() {
   const video = ensureWakeFallbackVideo();
   if (wakeFallbackPaint && !wakeFallbackTimer) {
@@ -1596,7 +1563,6 @@ function startWakeFallback() {
   if (video && video.paused) {
     video.play().catch(() => {});
   }
-  startSilentWakeAudio();
 }
 
 function stopWakeFallback() {
@@ -1619,7 +1585,6 @@ function stopWakeFallback() {
     clearInterval(wakeFallbackTimer);
     wakeFallbackTimer = null;
   }
-  stopSilentWakeAudio();
 }
 
 async function acquireWakeLock() {
@@ -1673,9 +1638,6 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     stopVisualizer();
   } else {
-    if (queue.audioCtx?.state === 'suspended') {
-      queue.audioCtx.resume().catch(() => {});
-    }
     // WakeLock은 화면 꺼짐 시 자동 해제되므로 활성 작업이 있으면 재취득
     updateWakeLock();
     if (!isVisualizerRunning()) startVisualizer();
@@ -1691,7 +1653,6 @@ if ('mediaSession' in navigator) {
   });
 
   navigator.mediaSession.setActionHandler('play', async () => {
-    await queue.primeForAutoplay();
     await queue.play();
   });
   navigator.mediaSession.setActionHandler('pause', () => queue.pause());
@@ -1701,7 +1662,6 @@ if ('mediaSession' in navigator) {
 
 // AudioContext는 사용자 제스처 없이 suspended될 수 있음 — 재개 보장
 document.addEventListener('click', () => {
-  if (queue.audioCtx?.state === 'suspended') queue.audioCtx.resume().catch(() => {});
   if (wakeLockDesired && shouldKeepScreenAwake()) acquireWakeLock();
 }, { once: false, passive: true });
 

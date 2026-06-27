@@ -1472,6 +1472,11 @@ header {
   color: var(--text-secondary);
   font-weight: 600;
 }
+.app-version {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
 .model-badges {
   display: flex;
   justify-content: center;

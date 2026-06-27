@@ -132,8 +132,10 @@ function flushAudioBuffers() {
   if (queue.segments.length > 0) {
     queue.stop();
     queue.segments.forEach(seg => {
+      queue._revokeSegmentAudioUrl?.(seg);
       seg.audioBuffer = null;
       seg.audioArrayBuffer = null;
+      seg.audioMimeType = null;
       if (seg.state === 'ready' || seg.state === 'generating') seg.state = 'idle';
     });
     queue.emit('stateUpdate', queue.segments);
@@ -769,6 +771,8 @@ async function handleAudioImport(file) {
 
     // setSegments resets audioBuffer to null, so we patch it in after
     queue.setSegments([{ id: 0, text: file.name.replace(/\.[^.]+$/, ''), ttsText: '' }]);
+    queue.segments[0].audioArrayBuffer = arrayBuffer;
+    queue.segments[0].audioMimeType = file.type || 'audio/mpeg';
     queue.segments[0].audioBuffer = audioBuffer;
     queue.segments[0].state = 'ready';
     state.segments = queue.segments;
@@ -1704,5 +1708,6 @@ document.addEventListener('click', () => {
 window.addEventListener('pagehide', () => {
   stopVisualizer();
   stopWakeFallback();
+  queue.releaseAudioSession();
 });
 window.addEventListener('resize', resizeVisualizerCanvas);
